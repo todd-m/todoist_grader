@@ -1,0 +1,21 @@
+[todoist]
+# Your Todoist API token.
+# Find it at: https://app.todoist.com/app/settings/integrations/developer
+api_token = "REPLACE_WITH_YOUR_TOKEN"
+
+[grading]
+# How many calendar days to look back for completion history.
+days = 30
+
+# Completion-rate thresholds for each letter grade.
+# rate >= A  →  grade A
+# rate >= B  →  grade B
+# otherwise  →  grade C
+[grading.thresholds]
+A = 0.85
+B = 0.65
+
+[rate_limit]
+# Seconds to sleep between Todoist write operations.
+# Todoist allows ~50 req/min on most plans; 0.5 s keeps you comfortably below.
+write_delay_seconds = 0.5
