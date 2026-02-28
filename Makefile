@@ -1,13 +1,19 @@
-.PHONY: run dry-run summary install
+PYTHON = .venv/bin/python
+
+.PHONY: run dry-run summary install test
 
 run:
-	python grader.py
+	$(PYTHON) grader.py
 
 dry-run:
-	python grader.py --dry-run --summary
+	$(PYTHON) grader.py --dry-run --summary
 
 summary:
-	python grader.py --summary
+	$(PYTHON) grader.py --summary
 
 install:
-	pip install todoist-api-python requests rich
+	python3 -m venv .venv
+	$(PYTHON) -m pip install todoist-api-python requests rich pytest pytest-mock
+
+test:
+	$(PYTHON) -m pytest test_grader.py -v
