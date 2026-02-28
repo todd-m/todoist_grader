@@ -6,7 +6,7 @@ Algorithm
 ---------
 For each recurring task over the past N days:
   - completion_count = number of days the task was marked complete
-  - snooze_count     = number of "updated" activity-log events that changed
+  - snooze_count     = number of "updated" activity events that changed
                        the due date on a day that had no same-day completion
   - rate             = completion_count / (completion_count + snooze_count)
                        (0.0 when no events exist)
@@ -15,6 +15,15 @@ Grade thresholds (configurable):
   A  if rate >= thresholds.A   (default 0.85)
   B  if rate >= thresholds.B   (default 0.65)
   C  otherwise
+
+Data source
+-----------
+The REST API v1 /api/v1/activities endpoint (object_type=item) is the only
+source that records recurring task completions. The /tasks/completed endpoints
+do NOT log recurring task completions — only the activity log does.
+
+  completed events: event_type="completed", extra_data.is_recurring=True
+  snooze events:    event_type="updated",   extra_data.last_due_date present
 
 Labels grade:A / grade:B / grade:C are created in Todoist if absent, then
 each recurring task has any existing grade label replaced with the new one.
@@ -41,7 +50,7 @@ from rich.console import Console
 from rich.table import Table
 from todoist_api_python.api import TodoistAPI
 
-SYNC_BASE = "https://api.todoist.com/sync/v9"
+ACTIVITIES_URL = "https://api.todoist.com/api/v1/activities"
 
 # The three label names this script manages
 GRADE_LABEL_NAMES: tuple[str, ...] = ("grade:A", "grade:B", "grade:C")
@@ -87,77 +96,63 @@ def parse_args() -> argparse.Namespace:
 
 
 # ---------------------------------------------------------------------------
-# Todoist Sync API helpers (completed tasks + activity log live here,
-# not in the REST v2 SDK)
+# SDK helper
 # ---------------------------------------------------------------------------
 
-def _sync_get(token: str, endpoint: str, params: dict | None = None) -> dict:
-    resp = requests.get(
-        f"{SYNC_BASE}/{endpoint}",
-        headers={"Authorization": f"Bearer {token}"},
-        params=params or {},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def fetch_completed_tasks(token: str, since: datetime) -> list[dict]:
-    """
-    Return all completed-item records since *since* via the Sync API.
-    Paginates automatically.
-
-    Each record has:
-      task_id        — ID of the original recurring task
-      completed_at   — ISO-8601 UTC timestamp of the completion
-    """
-    since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-    results: list[dict] = []
-    offset, limit = 0, 200
-
-    while True:
-        data = _sync_get(token, "items/completed/get_all", {
-            "since":  since_str,
-            "limit":  limit,
-            "offset": offset,
-        })
-        chunk: list[dict] = data.get("items", [])
-        results.extend(chunk)
-        if len(chunk) < limit:
-            break
-        offset += limit
-
+def _all_pages(paginator) -> list:
+    """Flatten a v3 SDK ResultsPaginator into a single list."""
+    results = []
+    for page in paginator:
+        results.extend(page)
     return results
 
 
-def fetch_activity_events(token: str, since: datetime) -> list[dict]:
+# ---------------------------------------------------------------------------
+# Activity log (REST API v1) — sole source of recurring task history
+# ---------------------------------------------------------------------------
+
+def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[dict]:
     """
-    Return all item-level 'updated' activity events since *since*.
-    Requires Todoist Pro/Business; raises HTTPError(402/403) otherwise.
-    Paginates automatically.
+    Return all item-level activity events of *event_type* since *since*.
+
+    Uses GET /api/v1/activities with object_type=item — the only endpoint
+    that records recurring task completions and due-date changes.
 
     Relevant fields per event:
-      object_id   — task ID
-      event_date  — ISO-8601 UTC timestamp of the event
-      extra_data  — dict; contains 'last_due_date' if due date was changed
+      object_id        — task ID (matches the active recurring task's ID)
+      event_date       — ISO-8601 UTC timestamp
+      event_type       — "completed" or "updated"
+      extra_data       — dict with:
+          is_recurring     (completed events) True when the task recurs
+          last_due_date    (updated events)   previous due date before change
     """
     since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
     results: list[dict] = []
-    offset, limit = 0, 100
+    cursor: str | None = None
 
     while True:
-        data = _sync_get(token, "activity/get", {
+        params: dict = {
             "object_type": "item",
-            "event_type":  "updated",
+            "event_type":  event_type,
             "since":       since_str,
-            "limit":       limit,
-            "offset":      offset,
-        })
-        chunk: list[dict] = data.get("events", [])
+            "limit":       100,
+        }
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = requests.get(
+            ACTIVITIES_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        chunk: list[dict] = data.get("results", [])
         results.extend(chunk)
-        if len(chunk) < limit:
+        cursor = data.get("next_cursor")
+        if not cursor or len(chunk) < 100:
             break
-        offset += limit
 
     return results
 
@@ -166,43 +161,48 @@ def fetch_activity_events(token: str, since: datetime) -> list[dict]:
 # Grading logic
 # ---------------------------------------------------------------------------
 
-def completion_dates_for(task_id: str, completed_items: list[dict]) -> set[str]:
+def completion_dates_for(task_id: str, completed_events: list[dict]) -> set[str]:
     """
     Return the set of YYYY-MM-DD dates on which *task_id* was completed.
-    For recurring tasks Todoist creates a new completed-item record per
-    occurrence; the 'task_id' field links each back to the source task.
+
+    Uses activity events with event_type="completed" and
+    extra_data.is_recurring=True, which is the correct source for recurring
+    task completions (they do not appear in /tasks/completed endpoints).
     """
     dates: set[str] = set()
-    for item in completed_items:
-        if str(item.get("task_id", "")) == task_id:
-            ts = item.get("completed_at") or item.get("date_completed", "")
-            if ts:
-                dates.add(ts[:10])  # YYYY-MM-DD
+    for event in completed_events:
+        if str(event.get("object_id", "")) != task_id:
+            continue
+        if not (event.get("extra_data") or {}).get("is_recurring"):
+            continue
+        ts = event.get("event_date", "")
+        if ts:
+            dates.add(ts[:10])  # YYYY-MM-DD
     return dates
 
 
 def count_snoozes(
     task_id: str,
-    activity_events: list[dict],
+    updated_events: list[dict],
     completion_dates: set[str],
 ) -> int:
     """
-    Count 'snooze' events for a task.
+    Count snooze events for a task.
 
-    A snooze is an activity-log 'updated' event where:
-      1. The due date was changed  (extra_data contains 'last_due_date'), AND
+    A snooze is an activity "updated" event where:
+      1. The due date was changed (extra_data contains 'last_due_date'), AND
       2. The task was NOT completed on that same calendar day.
 
-    Rationale: if you reschedule a recurring task to tomorrow instead of
-    completing it today, that is a snooze regardless of the new due date.
+    Rationale: rescheduling a recurring task to tomorrow instead of
+    completing it is a snooze regardless of the new due date.
     """
     count = 0
-    for event in activity_events:
+    for event in updated_events:
         if str(event.get("object_id", "")) != task_id:
             continue
         extra = event.get("extra_data") or {}
         if "last_due_date" not in extra:
-            continue                          # due date was not touched
+            continue                     # due date was not touched
         event_day = (event.get("event_date") or "")[:10]
         if event_day not in completion_dates:
             count += 1
@@ -223,7 +223,7 @@ def assign_grade(rate: float, thresholds: dict) -> str:
 
 def ensure_grade_labels(api: TodoistAPI, dry_run: bool) -> None:
     """Create grade:A / grade:B / grade:C labels in Todoist if they are missing."""
-    existing = {lbl.name for lbl in api.get_labels()}
+    existing = {lbl.name for lbl in _all_pages(api.get_labels())}
     for name in GRADE_LABEL_NAMES:
         if name in existing:
             continue
@@ -239,8 +239,8 @@ def ensure_grade_labels(api: TodoistAPI, dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    args   = parse_args()
-    cfg    = load_config(args.config)
+    args = parse_args()
+    cfg  = load_config(args.config)
 
     # ── Config values ──────────────────────────────────────────────────────
     try:
@@ -258,28 +258,14 @@ def main() -> None:
 
     # ── Fetch ──────────────────────────────────────────────────────────────
     print("Fetching tasks…")
-    all_tasks = api.get_tasks()
+    all_tasks = _all_pages(api.get_tasks())
     recurring = [t for t in all_tasks if t.due and t.due.is_recurring]
     print(f"  {len(recurring)} recurring  /  {len(all_tasks)} total")
 
-    print(f"Fetching completions for the past {days} days…")
-    completed_items = fetch_completed_tasks(token, since)
-    print(f"  {len(completed_items)} completed instances")
-
-    print("Fetching activity log (due-date changes)…")
-    try:
-        activity_events = fetch_activity_events(token, since)
-        print(f"  {len(activity_events)} updated events")
-    except requests.HTTPError as exc:
-        code = exc.response.status_code if exc.response is not None else 0
-        if code in (402, 403):
-            print(
-                "  Activity log unavailable (Todoist Pro/Business required).\n"
-                "  Snooze counts will be 0; completion rate reflects completions only."
-            )
-            activity_events = []
-        else:
-            raise
+    print(f"Fetching activity log for the past {days} days…")
+    completed_events = fetch_item_activities(token, since, "completed")
+    updated_events   = fetch_item_activities(token, since, "updated")
+    print(f"  {len(completed_events)} completed events, {len(updated_events)} updated events")
 
     # ── Ensure labels exist ────────────────────────────────────────────────
     print("Checking grade labels…")
@@ -289,8 +275,8 @@ def main() -> None:
     results: list[dict] = []
     for task in recurring:
         tid        = str(task.id)
-        comp_dates = completion_dates_for(tid, completed_items)
-        snoozes    = count_snoozes(tid, activity_events, comp_dates)
+        comp_dates = completion_dates_for(tid, completed_events)
+        snoozes    = count_snoozes(tid, updated_events, comp_dates)
         comps      = len(comp_dates)
         total      = comps + snoozes
         rate       = comps / total if total else 0.0
@@ -312,7 +298,6 @@ def main() -> None:
         task      = r["task"]
         new_label = f"grade:{r['grade']}"
         old       = list(task.labels or [])
-        # Strip any existing grade labels, then append the new one
         filtered  = [lbl for lbl in old if lbl not in grade_label_set]
         new       = filtered + [new_label]
 

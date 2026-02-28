@@ -4,12 +4,11 @@ Unit tests for grader.py
 Run with:  pytest test_grader.py -v
 """
 
-import sys
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -20,10 +19,8 @@ from grader import (
     completion_dates_for,
     count_snoozes,
     ensure_grade_labels,
-    fetch_activity_events,
-    fetch_completed_tasks,
+    fetch_item_activities,
     load_config,
-    _sync_get,
 )
 
 
@@ -82,42 +79,56 @@ class TestLoadConfig:
 
 
 # ---------------------------------------------------------------------------
-# completion_dates_for
+# completion_dates_for  (activity events: object_id, event_date, extra_data.is_recurring)
 # ---------------------------------------------------------------------------
 
 class TestCompletionDatesFor:
-    ITEMS = [
-        {"task_id": "1", "completed_at": "2024-03-01T09:00:00Z"},
-        {"task_id": "1", "completed_at": "2024-03-05T18:30:00Z"},
-        {"task_id": "2", "completed_at": "2024-03-01T10:00:00Z"},
-        {"task_id": "1", "completed_at": "2024-03-05T20:00:00Z"},  # same day as above → deduped
+    EVENTS = [
+        {"object_id": "1", "event_date": "2024-03-01T09:00:00Z", "extra_data": {"is_recurring": True}},
+        {"object_id": "1", "event_date": "2024-03-05T18:30:00Z", "extra_data": {"is_recurring": True}},
+        {"object_id": "2", "event_date": "2024-03-01T10:00:00Z", "extra_data": {"is_recurring": True}},
+        {"object_id": "1", "event_date": "2024-03-05T20:00:00Z", "extra_data": {"is_recurring": True}},  # same day → deduped
     ]
 
     def test_returns_dates_for_matching_task(self):
-        dates = completion_dates_for("1", self.ITEMS)
+        dates = completion_dates_for("1", self.EVENTS)
         assert dates == {"2024-03-01", "2024-03-05"}
 
     def test_deduplicates_same_day_completions(self):
-        dates = completion_dates_for("1", self.ITEMS)
+        dates = completion_dates_for("1", self.EVENTS)
         assert len(dates) == 2  # two unique days despite three records
 
     def test_returns_empty_for_unknown_task(self):
-        assert completion_dates_for("99", self.ITEMS) == set()
+        assert completion_dates_for("99", self.EVENTS) == set()
 
     def test_returns_empty_for_empty_list(self):
         assert completion_dates_for("1", []) == set()
 
-    def test_falls_back_to_date_completed_field(self):
-        items = [{"task_id": "1", "date_completed": "2024-04-10T08:00:00Z"}]
-        assert completion_dates_for("1", items) == {"2024-04-10"}
+    def test_skips_non_recurring_events(self):
+        events = [{"object_id": "1", "event_date": "2024-04-10T08:00:00Z",
+                   "extra_data": {"is_recurring": False}}]
+        assert completion_dates_for("1", events) == set()
 
-    def test_skips_items_with_no_timestamp(self):
-        items = [{"task_id": "1", "completed_at": ""}]
-        assert completion_dates_for("1", items) == set()
+    def test_skips_events_with_no_is_recurring(self):
+        events = [{"object_id": "1", "event_date": "2024-04-10T08:00:00Z", "extra_data": {}}]
+        assert completion_dates_for("1", events) == set()
 
-    def test_task_id_coerced_to_string(self):
-        items = [{"task_id": 42, "completed_at": "2024-05-01T00:00:00Z"}]
-        assert completion_dates_for("42", items) == {"2024-05-01"}
+    def test_skips_events_with_no_timestamp(self):
+        events = [{"object_id": "1", "event_date": "", "extra_data": {"is_recurring": True}}]
+        assert completion_dates_for("1", events) == set()
+
+    def test_object_id_coerced_to_string(self):
+        events = [{"object_id": 42, "event_date": "2024-05-01T00:00:00Z",
+                   "extra_data": {"is_recurring": True}}]
+        assert completion_dates_for("42", events) == {"2024-05-01"}
+
+    def test_handles_missing_extra_data(self):
+        events = [{"object_id": "1", "event_date": "2024-04-10T08:00:00Z"}]
+        assert completion_dates_for("1", events) == set()
+
+    def test_handles_none_extra_data(self):
+        events = [{"object_id": "1", "event_date": "2024-04-10T08:00:00Z", "extra_data": None}]
+        assert completion_dates_for("1", events) == set()
 
 
 # ---------------------------------------------------------------------------
@@ -236,20 +247,45 @@ class TestAssignGrade:
 
 
 # ---------------------------------------------------------------------------
-# _sync_get
+# fetch_item_activities
 # ---------------------------------------------------------------------------
 
-class TestSyncGet:
+class TestFetchItemActivities:
+    SINCE = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
     @patch("grader.requests.get")
-    def test_returns_json_on_success(self, mock_get):
-        mock_get.return_value = make_response({"items": [1, 2, 3]})
-        result = _sync_get("tok", "items/completed/get_all", {"limit": 10})
-        assert result == {"items": [1, 2, 3]}
+    def test_returns_results_from_single_page(self, mock_get):
+        mock_get.return_value = make_response({"results": [{"object_id": "1"}, {"object_id": "2"}]})
+        result = fetch_item_activities("tok", self.SINCE, "completed")
+        assert len(result) == 2
+
+    @patch("grader.requests.get")
+    def test_paginates_via_next_cursor(self, mock_get):
+        full_page = make_response({
+            "results": [{"object_id": str(i)} for i in range(100)],
+            "next_cursor": "cursor_abc",
+        })
+        last_page = make_response({"results": [{"object_id": "x"}]})
+        mock_get.side_effect = [full_page, last_page]
+        result = fetch_item_activities("tok", self.SINCE, "completed")
+        assert len(result) == 101
+        assert mock_get.call_count == 2
+
+    @patch("grader.requests.get")
+    def test_stops_when_no_cursor(self, mock_get):
+        mock_get.return_value = make_response({"results": [{"object_id": "1"}]})
+        fetch_item_activities("tok", self.SINCE, "completed")
+        assert mock_get.call_count == 1
+
+    @patch("grader.requests.get")
+    def test_returns_empty_list_when_no_results(self, mock_get):
+        mock_get.return_value = make_response({"results": []})
+        assert fetch_item_activities("tok", self.SINCE, "completed") == []
 
     @patch("grader.requests.get")
     def test_sends_auth_header(self, mock_get):
-        mock_get.return_value = make_response({})
-        _sync_get("mytoken", "activity/get")
+        mock_get.return_value = make_response({"results": []})
+        fetch_item_activities("mytoken", self.SINCE, "completed")
         _, kwargs = mock_get.call_args
         assert kwargs["headers"]["Authorization"] == "Bearer mytoken"
 
@@ -257,86 +293,37 @@ class TestSyncGet:
     def test_raises_on_http_error(self, mock_get):
         mock_get.return_value = make_response({}, status_code=500)
         with pytest.raises(requests.HTTPError):
-            _sync_get("tok", "activity/get")
+            fetch_item_activities("tok", self.SINCE, "completed")
 
     @patch("grader.requests.get")
-    def test_passes_params(self, mock_get):
-        mock_get.return_value = make_response({})
-        _sync_get("tok", "items/completed/get_all", {"since": "2024-01-01", "limit": 200})
+    def test_sends_correct_params_for_completed(self, mock_get):
+        mock_get.return_value = make_response({"results": []})
+        fetch_item_activities("tok", self.SINCE, "completed")
         _, kwargs = mock_get.call_args
-        assert kwargs["params"]["since"] == "2024-01-01"
-        assert kwargs["params"]["limit"] == 200
-
-
-# ---------------------------------------------------------------------------
-# fetch_completed_tasks
-# ---------------------------------------------------------------------------
-
-class TestFetchCompletedTasks:
-    SINCE = datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-    @patch("grader._sync_get")
-    def test_returns_all_items(self, mock_sync):
-        mock_sync.return_value = {"items": [{"task_id": "1"}, {"task_id": "2"}]}
-        result = fetch_completed_tasks("tok", self.SINCE)
-        assert len(result) == 2
-
-    @patch("grader._sync_get")
-    def test_paginates_until_partial_page(self, mock_sync):
-        full_page  = {"items": [{"task_id": str(i)} for i in range(200)]}
-        last_page  = {"items": [{"task_id": "x"}]}
-        mock_sync.side_effect = [full_page, last_page]
-        result = fetch_completed_tasks("tok", self.SINCE)
-        assert len(result) == 201
-        assert mock_sync.call_count == 2
-
-    @patch("grader._sync_get")
-    def test_returns_empty_list_when_no_items(self, mock_sync):
-        mock_sync.return_value = {"items": []}
-        assert fetch_completed_tasks("tok", self.SINCE) == []
-
-    @patch("grader._sync_get")
-    def test_formats_since_correctly(self, mock_sync):
-        mock_sync.return_value = {"items": []}
-        fetch_completed_tasks("tok", self.SINCE)
-        params = mock_sync.call_args[0][2]
-        assert params["since"] == "2024-01-01T00:00:00"
-
-
-# ---------------------------------------------------------------------------
-# fetch_activity_events
-# ---------------------------------------------------------------------------
-
-class TestFetchActivityEvents:
-    SINCE = datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-    @patch("grader._sync_get")
-    def test_returns_all_events(self, mock_sync):
-        mock_sync.return_value = {"events": [{"object_id": "1"}, {"object_id": "2"}]}
-        result = fetch_activity_events("tok", self.SINCE)
-        assert len(result) == 2
-
-    @patch("grader._sync_get")
-    def test_paginates_until_partial_page(self, mock_sync):
-        full_page = {"events": [{"object_id": str(i)} for i in range(100)]}
-        last_page = {"events": [{"object_id": "x"}]}
-        mock_sync.side_effect = [full_page, last_page]
-        result = fetch_activity_events("tok", self.SINCE)
-        assert len(result) == 101
-        assert mock_sync.call_count == 2
-
-    @patch("grader._sync_get")
-    def test_returns_empty_list_when_no_events(self, mock_sync):
-        mock_sync.return_value = {"events": []}
-        assert fetch_activity_events("tok", self.SINCE) == []
-
-    @patch("grader._sync_get")
-    def test_requests_updated_events_only(self, mock_sync):
-        mock_sync.return_value = {"events": []}
-        fetch_activity_events("tok", self.SINCE)
-        params = mock_sync.call_args[0][2]
-        assert params["event_type"] == "updated"
+        params = kwargs["params"]
         assert params["object_type"] == "item"
+        assert params["event_type"] == "completed"
+        assert params["since"] == "2024-01-01T00:00:00"
+        assert params["limit"] == 100
+
+    @patch("grader.requests.get")
+    def test_sends_correct_event_type_for_updated(self, mock_get):
+        mock_get.return_value = make_response({"results": []})
+        fetch_item_activities("tok", self.SINCE, "updated")
+        _, kwargs = mock_get.call_args
+        assert kwargs["params"]["event_type"] == "updated"
+
+    @patch("grader.requests.get")
+    def test_passes_cursor_on_subsequent_requests(self, mock_get):
+        full_page = make_response({
+            "results": [{"object_id": str(i)} for i in range(100)],
+            "next_cursor": "cursor_xyz",
+        })
+        last_page = make_response({"results": []})
+        mock_get.side_effect = [full_page, last_page]
+        fetch_item_activities("tok", self.SINCE, "completed")
+        second_call_params = mock_get.call_args_list[1][1]["params"]
+        assert second_call_params["cursor"] == "cursor_xyz"
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +333,8 @@ class TestFetchActivityEvents:
 class TestEnsureGradeLabels:
     def _make_api(self, existing_names):
         api = MagicMock()
-        api.get_labels.return_value = [make_label(n) for n in existing_names]
+        # _all_pages iterates over the paginator; each element is a page (list of labels)
+        api.get_labels.return_value = [[make_label(n) for n in existing_names]]
         return api
 
     def test_creates_missing_labels(self):
@@ -398,10 +386,24 @@ class TestEnsureGradeLabels:
 class TestGradingPipeline:
     """End-to-end tests through the pure computation layer."""
 
-    def _run(self, task_id, completed_items, activity_events, thresholds=None):
+    def _comp_event(self, object_id, date_str):
+        return {
+            "object_id": object_id,
+            "event_date": f"{date_str}T09:00:00Z",
+            "extra_data": {"is_recurring": True},
+        }
+
+    def _snooze_event(self, object_id, date_str):
+        return {
+            "object_id": object_id,
+            "event_date": f"{date_str}T12:00:00Z",
+            "extra_data": {"last_due_date": "2024-01-01"},
+        }
+
+    def _run(self, task_id, completed_events, snooze_events, thresholds=None):
         thresholds = thresholds or {"A": 0.85, "B": 0.65}
-        comp_dates = completion_dates_for(task_id, completed_items)
-        snoozes    = count_snoozes(task_id, activity_events, comp_dates)
+        comp_dates = completion_dates_for(task_id, completed_events)
+        snoozes    = count_snoozes(task_id, snooze_events, comp_dates)
         comps      = len(comp_dates)
         total      = comps + snoozes
         rate       = comps / total if total else 0.0
@@ -409,8 +411,8 @@ class TestGradingPipeline:
         return {"comps": comps, "snoozes": snoozes, "rate": rate, "grade": grade}
 
     def test_perfect_record_gets_A(self):
-        items  = [{"task_id": "1", "completed_at": f"2024-03-{d:02d}T09:00:00Z"} for d in range(1, 11)]
-        result = self._run("1", items, [])
+        events = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 11)]
+        result = self._run("1", events, [])
         assert result["grade"] == "A"
         assert result["rate"] == pytest.approx(1.0)
 
@@ -421,13 +423,9 @@ class TestGradingPipeline:
 
     def test_snoozes_lower_the_grade(self):
         # 6 completions, 4 snoozes → 60% → C
-        items = [{"task_id": "1", "completed_at": f"2024-03-{d:02d}T09:00:00Z"} for d in range(1, 7)]
-        events = [
-            {"object_id": "1", "event_date": f"2024-03-{d:02d}T12:00:00Z",
-             "extra_data": {"last_due_date": "2024-03-01"}}
-            for d in range(10, 14)
-        ]
-        result = self._run("1", items, events)
+        comp_events   = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 7)]
+        snooze_events = [self._snooze_event("1", f"2024-03-{d:02d}") for d in range(10, 14)]
+        result = self._run("1", comp_events, snooze_events)
         assert result["comps"] == 6
         assert result["snoozes"] == 4
         assert result["rate"] == pytest.approx(0.6)
@@ -435,20 +433,17 @@ class TestGradingPipeline:
 
     def test_snooze_on_completion_day_not_counted(self):
         # Completed on day 1, snooze event also on day 1 → snooze not counted
-        items  = [{"task_id": "1", "completed_at": "2024-03-01T09:00:00Z"}]
-        events = [{"object_id": "1", "event_date": "2024-03-01T12:00:00Z",
-                   "extra_data": {"last_due_date": "2024-03-01"}}]
-        result = self._run("1", items, events)
+        comp_events   = [self._comp_event("1", "2024-03-01")]
+        snooze_events = [self._snooze_event("1", "2024-03-01")]
+        result = self._run("1", comp_events, snooze_events)
         assert result["snoozes"] == 0
         assert result["comps"] == 1
         assert result["grade"] == "A"
 
     def test_grade_b_boundary(self):
-        # exactly 65% → B
-        items  = [{"task_id": "1", "completed_at": f"2024-03-{d:02d}T09:00:00Z"} for d in range(1, 14)]  # 13 completions
-        events = [{"object_id": "1", "event_date": f"2024-03-{d:02d}T12:00:00Z",
-                   "extra_data": {"last_due_date": "2024-01-01"}} for d in range(20, 27)]  # 7 snoozes
-        result = self._run("1", items, events)
-        # 13 / 20 = 0.65 → exactly B threshold
+        # 13 completions, 7 snoozes → 65% → exactly B threshold
+        comp_events   = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 14)]
+        snooze_events = [self._snooze_event("1", f"2024-03-{d:02d}") for d in range(20, 27)]
+        result = self._run("1", comp_events, snooze_events)
         assert result["rate"] == pytest.approx(0.65)
         assert result["grade"] == "B"

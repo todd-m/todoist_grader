@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "todoist": {
+      "type": "sse",
+      "url": "https://ai.todoist.net/mcp"
+    }
+  }
+}
