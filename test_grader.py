@@ -255,17 +255,21 @@ class TestFetchItemActivities:
 
     @patch("grader.requests.get")
     def test_returns_results_from_single_page(self, mock_get):
-        mock_get.return_value = make_response({"results": [{"object_id": "1"}, {"object_id": "2"}]})
+        # event_date must be >= since (2024-01-01) to pass the date filter
+        mock_get.return_value = make_response({"results": [
+            {"object_id": "1", "event_date": "2024-03-01T09:00:00Z"},
+            {"object_id": "2", "event_date": "2024-03-02T09:00:00Z"},
+        ]})
         result = fetch_item_activities("tok", self.SINCE, "completed")
         assert len(result) == 2
 
     @patch("grader.requests.get")
     def test_paginates_via_next_cursor(self, mock_get):
         full_page = make_response({
-            "results": [{"object_id": str(i)} for i in range(100)],
+            "results": [{"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(100)],
             "next_cursor": "cursor_abc",
         })
-        last_page = make_response({"results": [{"object_id": "x"}]})
+        last_page = make_response({"results": [{"object_id": "x", "event_date": "2024-03-02T09:00:00Z"}]})
         mock_get.side_effect = [full_page, last_page]
         result = fetch_item_activities("tok", self.SINCE, "completed")
         assert len(result) == 101
@@ -303,8 +307,8 @@ class TestFetchItemActivities:
         params = kwargs["params"]
         assert params["object_type"] == "item"
         assert params["event_type"] == "completed"
-        assert params["since"] == "2024-01-01T00:00:00"
         assert params["limit"] == 100
+        assert "since" not in params  # server ignores since; we filter client-side
 
     @patch("grader.requests.get")
     def test_sends_correct_event_type_for_updated(self, mock_get):
@@ -316,7 +320,7 @@ class TestFetchItemActivities:
     @patch("grader.requests.get")
     def test_passes_cursor_on_subsequent_requests(self, mock_get):
         full_page = make_response({
-            "results": [{"object_id": str(i)} for i in range(100)],
+            "results": [{"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(100)],
             "next_cursor": "cursor_xyz",
         })
         last_page = make_response({"results": []})
@@ -324,6 +328,19 @@ class TestFetchItemActivities:
         fetch_item_activities("tok", self.SINCE, "completed")
         second_call_params = mock_get.call_args_list[1][1]["params"]
         assert second_call_params["cursor"] == "cursor_xyz"
+
+    @patch("grader.requests.get")
+    def test_stops_early_when_events_predate_since(self, mock_get):
+        # First page has 98 events in-window + 2 before since → should stop, not fetch page 2
+        in_window = [{"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(98)]
+        too_old   = [{"object_id": "old", "event_date": "2023-12-01T09:00:00Z"}] * 2
+        mock_get.return_value = make_response({
+            "results": in_window + too_old,
+            "next_cursor": "cursor_would_not_be_used",
+        })
+        result = fetch_item_activities("tok", self.SINCE, "completed")
+        assert len(result) == 98        # only in-window events
+        assert mock_get.call_count == 1  # no second page fetched
 
 
 # ---------------------------------------------------------------------------

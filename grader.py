@@ -125,8 +125,12 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
       extra_data       — dict with:
           is_recurring     (completed events) True when the task recurs
           last_due_date    (updated events)   previous due date before change
+
+    Note: the API's 'since' query param is ignored server-side; events are
+    returned newest-first, so we stop paginating as soon as we see an event
+    older than *since* and filter client-side.
     """
-    since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
+    since_date = since.strftime("%Y-%m-%d")   # YYYY-MM-DD for cheap string compare
     results: list[dict] = []
     cursor: str | None = None
 
@@ -134,7 +138,6 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
         params: dict = {
             "object_type": "item",
             "event_type":  event_type,
-            "since":       since_str,
             "limit":       100,
         }
         if cursor:
@@ -149,7 +152,13 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
         resp.raise_for_status()
         data = resp.json()
         chunk: list[dict] = data.get("results", [])
-        results.extend(chunk)
+
+        # Events arrive newest-first.  Stop as soon as any event predates since.
+        in_window = [e for e in chunk if (e.get("event_date") or "")[:10] >= since_date]
+        results.extend(in_window)
+        if len(in_window) < len(chunk):
+            break           # hit the date boundary — no need to page further
+
         cursor = data.get("next_cursor")
         if not cursor or len(chunk) < 100:
             break

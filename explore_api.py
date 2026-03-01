@@ -374,23 +374,118 @@ def show_activity_log_global(limit=20):
 
 # ---------------------------------------------------------------------------
 
+def debug_grader_timing():
+    """
+    Step through each phase of grader.py's main() to isolate where it hangs.
+    Prints elapsed time at each stage.
+    """
+    import time
+    print("\n=== Grader pipeline timing debug ===")
+    t0 = time.time()
+
+    print("1. Fetching tasks via SDK...")
+    all_tasks = []
+    for page in api.get_tasks():
+        all_tasks.extend(page)
+        print(f"   page received, total so far: {len(all_tasks)}")
+    recurring = [t for t in all_tasks if t.due and t.due.is_recurring]
+    print(f"   Done in {time.time()-t0:.1f}s  — {len(all_tasks)} total, {len(recurring)} recurring")
+
+    t1 = time.time()
+    print(f"\n2. Fetching completed events from /api/v1/activities...")
+    since_str = SINCE.strftime("%Y-%m-%dT%H:%M:%S")
+    completed_events = []
+    cursor = None
+    page_n = 0
+    while True:
+        params = {"object_type": "item", "event_type": "completed",
+                  "since": since_str, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        resp = requests.get("https://api.todoist.com/api/v1/activities",
+                            headers=HEADERS, params=params, timeout=30)
+        data = resp.json()
+        chunk = data.get("results", [])
+        completed_events.extend(chunk)
+        cursor = data.get("next_cursor")
+        page_n += 1
+        print(f"   page {page_n}: {len(chunk)} events, cursor={bool(cursor)}")
+        if not cursor or len(chunk) < 100:
+            break
+    print(f"   Done in {time.time()-t1:.1f}s  — {len(completed_events)} completed events")
+
+    t2 = time.time()
+    print(f"\n3. Fetching updated events from /api/v1/activities...")
+    updated_events = []
+    cursor = None
+    page_n = 0
+    while True:
+        params = {"object_type": "item", "event_type": "updated",
+                  "since": since_str, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        resp = requests.get("https://api.todoist.com/api/v1/activities",
+                            headers=HEADERS, params=params, timeout=30)
+        data = resp.json()
+        chunk = data.get("results", [])
+        updated_events.extend(chunk)
+        cursor = data.get("next_cursor")
+        page_n += 1
+        print(f"   page {page_n}: {len(chunk)} events, cursor={bool(cursor)}")
+        if not cursor or len(chunk) < 100:
+            break
+    print(f"   Done in {time.time()-t2:.1f}s  — {len(updated_events)} updated events")
+
+    print(f"\nTotal elapsed: {time.time()-t0:.1f}s")
+
+
+def debug_event_ordering():
+    """
+    Check whether /api/v1/activities returns events newest-first or oldest-first,
+    and whether the 'since' parameter actually filters results.
+
+    This lets us decide whether to add an early-exit to the pagination loop.
+    """
+    since_str = SINCE.strftime("%Y-%m-%dT%H:%M:%S")
+    print(f"\n=== Event ordering / 'since' filter test ===")
+    print(f"since_str = {since_str}  (30 days ago)")
+
+    # Fetch first page with since
+    resp = requests.get(
+        "https://api.todoist.com/api/v1/activities",
+        headers=HEADERS,
+        params={"object_type": "item", "event_type": "completed",
+                "since": since_str, "limit": 10},
+        timeout=30,
+    )
+    data = resp.json()
+    results = data.get("results", [])
+    print(f"\nFirst 10 events (with since={since_str}):")
+    for r in results:
+        print(f"  {r.get('event_date','')[:10]}")
+
+    # Fetch first page WITHOUT since (to compare)
+    resp2 = requests.get(
+        "https://api.todoist.com/api/v1/activities",
+        headers=HEADERS,
+        params={"object_type": "item", "event_type": "completed", "limit": 10},
+        timeout=30,
+    )
+    data2 = resp2.json()
+    results2 = data2.get("results", [])
+    print(f"\nFirst 10 events (WITHOUT since):")
+    for r in results2:
+        print(f"  {r.get('event_date','')[:10]}")
+
+    # Check if page 1 with since == page 1 without since
+    dates_with    = [r.get("event_date","")[:10] for r in results]
+    dates_without = [r.get("event_date","")[:10] for r in results2]
+    print(f"\nsince filter changes results: {dates_with != dates_without}")
+    print(f"dates with since:    {dates_with}")
+    print(f"dates without since: {dates_without}")
+
+
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    recurring = show_recurring_tasks()
-    completed = show_completed_by_completion_date()
-    show_completed_by_due_date()
-    match_recurring_vs_completed(recurring, completed)
-
-    if recurring:
-        show_task_activity(recurring[0].id, recurring[0].content)
-
-    show_raw_api_endpoints()
-    show_sync_completed_items()
-
-    # New: probe the activity endpoint directly
-    if recurring:
-        show_activity_log_for_task(recurring[0].id, recurring[0].content)
-    show_activity_log_global()
-    probe_activity_url_variants(recurring[0].id if recurring else None)
-    if recurring:
-        show_activities_endpoint(recurring[0].id, recurring[0].content)
-    show_activities_deep_dive(recurring[0].id if recurring else None)
+    debug_event_ordering()
