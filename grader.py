@@ -334,6 +334,23 @@ def main() -> None:
             "grade":   grade,
         })
 
+    # ── Build report view (optionally filtered to today) ───────────────────
+    nr_snoozed = nonrecurring_snooze_report(all_tasks, updated_events)
+    if args.today:
+        today_str      = datetime.now().strftime("%Y-%m-%d")
+        def _due_today(r): return r["task"].due and r["task"].due.date == today_str
+        report_results  = [r for r in results   if _due_today(r)]
+        nr_snoozed      = [r for r in nr_snoozed if _due_today(r)]
+        recurring_title = f"Recurring Tasks Due Today  (grades over past {days} days)"
+        nr_title        = "Non-Recurring Tasks Due Today: Snooze Counts"
+        nr_header       = "Non-recurring tasks due today that have been snoozed"
+    else:
+        today_str       = None
+        report_results  = results
+        recurring_title = f"Recurring Task Grades  (past {days} days)"
+        nr_title        = f"Non-Recurring Tasks: Snooze Counts  (past {days} days)"
+        nr_header       = f"Non-recurring tasks snoozed in the past {days} days"
+
     # ── Apply labels ───────────────────────────────────────────────────────
     print("\nApplying grade labels…")
     grade_label_set = set(GRADE_LABEL_NAMES)
@@ -355,7 +372,9 @@ def main() -> None:
             f"rate={r['rate']:5.1%}  →  grade:{r['grade']}"
         )
         if args.dry_run:
-            print(f"[dry-run]{line}")
+            # With --today, only print dry-run lines for tasks due today
+            if not args.today or (task.due and task.due.date == today_str):
+                print(f"[dry-run]{line}")
         else:
             api.update_task(task_id=task.id, labels=new)
             print(line)
@@ -365,25 +384,6 @@ def main() -> None:
         print("  All tasks already have the correct grade label.")
     elif not args.dry_run:
         print(f"\n  {changed} task(s) updated.")
-
-    # ── Non-recurring snooze report ────────────────────────────────────────
-    nr_snoozed = nonrecurring_snooze_report(all_tasks, updated_events)
-
-    # ── Apply --today filter to both reports ───────────────────────────────
-    if args.today:
-        today_str      = datetime.now().strftime("%Y-%m-%d")
-        report_results = [r for r in results
-                          if r["task"].due and r["task"].due.date == today_str]
-        nr_snoozed     = [r for r in nr_snoozed
-                          if r["task"].due and r["task"].due.date == today_str]
-        recurring_title = f"Recurring Tasks Due Today  (grades over past {days} days)"
-        nr_title        = "Non-Recurring Tasks Due Today: Snooze Counts"
-        nr_header       = "Non-recurring tasks due today that have been snoozed"
-    else:
-        report_results  = results
-        recurring_title = f"Recurring Task Grades  (past {days} days)"
-        nr_title        = f"Non-Recurring Tasks: Snooze Counts  (past {days} days)"
-        nr_header       = f"Non-recurring tasks snoozed in the past {days} days"
 
     if nr_snoozed:
         print(f"\n{nr_header}:")
