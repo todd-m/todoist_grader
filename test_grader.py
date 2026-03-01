@@ -398,6 +398,48 @@ class TestEnsureGradeLabels:
 
 
 # ---------------------------------------------------------------------------
+# --today filter logic  (applied in main() to both report_results / nr_snoozed)
+# ---------------------------------------------------------------------------
+
+class TestTodayFilter:
+    """
+    The --today filter is applied in main() after nonrecurring_snooze_report
+    and after computing results.  We test the predicate directly here.
+    """
+
+    def _row(self, due_date: str | None):
+        """Build a minimal result/nr_snoozed row with the given due date."""
+        if due_date is None:
+            task = SimpleNamespace(content="no-due", due=None)
+        else:
+            task = SimpleNamespace(content="task", due=SimpleNamespace(date=due_date))
+        return {"task": task, "snoozes": 1, "comps": 0, "rate": 0.0, "grade": "C"}
+
+    def _apply_filter(self, rows, today_str):
+        return [r for r in rows if r["task"].due and r["task"].due.date == today_str]
+
+    def test_keeps_tasks_due_today(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = [self._row(today)]
+        assert len(self._apply_filter(rows, today)) == 1
+
+    def test_excludes_tasks_due_other_days(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = [self._row("2020-01-01"), self._row("2099-12-31")]
+        assert self._apply_filter(rows, today) == []
+
+    def test_excludes_tasks_with_no_due_date(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = [self._row(None)]
+        assert self._apply_filter(rows, today) == []
+
+    def test_mixed_due_dates(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = [self._row(today), self._row("2020-01-01"), self._row(None)]
+        assert len(self._apply_filter(rows, today)) == 1
+
+
+# ---------------------------------------------------------------------------
 # nonrecurring_snooze_report
 # ---------------------------------------------------------------------------
 

@@ -92,6 +92,10 @@ def parse_args() -> argparse.Namespace:
         "--summary", action="store_true",
         help="Print a rich summary table after grading",
     )
+    parser.add_argument(
+        "--today", action="store_true",
+        help="Filter reports to tasks due today (recurring and non-recurring)",
+    )
     return parser.parse_args()
 
 
@@ -364,8 +368,25 @@ def main() -> None:
 
     # ── Non-recurring snooze report ────────────────────────────────────────
     nr_snoozed = nonrecurring_snooze_report(all_tasks, updated_events)
+
+    # ── Apply --today filter to both reports ───────────────────────────────
+    if args.today:
+        today_str      = datetime.now().strftime("%Y-%m-%d")
+        report_results = [r for r in results
+                          if r["task"].due and r["task"].due.date == today_str]
+        nr_snoozed     = [r for r in nr_snoozed
+                          if r["task"].due and r["task"].due.date == today_str]
+        recurring_title = f"Recurring Tasks Due Today  (grades over past {days} days)"
+        nr_title        = "Non-Recurring Tasks Due Today: Snooze Counts"
+        nr_header       = "Non-recurring tasks due today that have been snoozed"
+    else:
+        report_results  = results
+        recurring_title = f"Recurring Task Grades  (past {days} days)"
+        nr_title        = f"Non-Recurring Tasks: Snooze Counts  (past {days} days)"
+        nr_header       = f"Non-recurring tasks snoozed in the past {days} days"
+
     if nr_snoozed:
-        print(f"\nNon-recurring tasks snoozed in the past {days} days:")
+        print(f"\n{nr_header}:")
         for r in nr_snoozed:
             print(f"  {r['snoozes']:3d}x  {r['task'].content!r}")
 
@@ -375,7 +396,7 @@ def main() -> None:
         console     = Console()
 
         table = Table(
-            title=f"Recurring Task Grades  (past {days} days)",
+            title=recurring_title,
             show_header=True,
             header_style="bold",
             border_style="dim",
@@ -387,7 +408,7 @@ def main() -> None:
         table.add_column("Rate",        justify="right")
         table.add_column("Grade",       justify="center")
 
-        for r in sorted(results, key=lambda x: -x["rate"]):
+        for r in sorted(report_results, key=lambda x: -x["rate"]):
             g   = r["grade"]
             sty = grade_style[g]
             table.add_row(
@@ -402,7 +423,7 @@ def main() -> None:
 
         if nr_snoozed:
             nr_table = Table(
-                title=f"Non-Recurring Tasks: Snooze Counts  (past {days} days)",
+                title=nr_title,
                 show_header=True,
                 header_style="bold",
                 border_style="dim",
