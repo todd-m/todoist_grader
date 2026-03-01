@@ -21,6 +21,7 @@ from grader import (
     ensure_grade_labels,
     fetch_item_activities,
     load_config,
+    main,
     nonrecurring_snooze_report,
 )
 
@@ -607,3 +608,82 @@ class TestGradingPipeline:
         result = self._run("1", comp_events, snooze_events)
         assert result["rate"] == pytest.approx(0.65)
         assert result["grade"] == "B"
+
+
+# ---------------------------------------------------------------------------
+# Confirmation prompt (interactive y/N in main())
+# ---------------------------------------------------------------------------
+
+class TestConfirmationPrompt:
+    """Tests for the [y/N] prompt shown before applying label writes in main()."""
+
+    def _make_recurring_task(self, id="1", labels=None):
+        due = SimpleNamespace(is_recurring=True, date="2026-03-01")
+        return SimpleNamespace(id=id, content="Daily standup", labels=labels or [], due=due)
+
+    def _patch_deps(self, mocker, tasks, argv=None):
+        """Patch all external I/O dependencies for main(), return the mock API."""
+        mock_api = MagicMock()
+        mock_api.get_labels.return_value = [
+            [SimpleNamespace(name=n) for n in ("grade:A", "grade:B", "grade:C")]
+        ]
+        mock_api.get_tasks.return_value = [tasks]
+        mocker.patch("grader.load_config", return_value={
+            "todoist": {"api_token": "fake"},
+            "grading": {"days": 7},
+            "rate_limit": {"write_delay_seconds": 0},
+        })
+        mocker.patch("grader.TodoistAPI", return_value=mock_api)
+        mocker.patch("grader.fetch_item_activities", return_value=[])
+        mocker.patch("sys.argv", argv or ["grader.py"])
+        return mock_api
+
+    def test_confirmed_applies_updates(self, mocker):
+        task = self._make_recurring_task(labels=[])   # no grade label → needs grade:C
+        mock_api = self._patch_deps(mocker, [task])
+        mocker.patch("builtins.input", return_value="y")
+
+        main()
+
+        mock_api.update_task.assert_called_once_with(task_id="1", labels=["grade:C"])
+
+    def test_denied_exits_without_writes(self, mocker):
+        task = self._make_recurring_task(labels=[])
+        mock_api = self._patch_deps(mocker, [task])
+        mocker.patch("builtins.input", return_value="n")
+
+        with pytest.raises(SystemExit, match="Aborted"):
+            main()
+
+        mock_api.update_task.assert_not_called()
+
+    def test_empty_input_exits_without_writes(self, mocker):
+        task = self._make_recurring_task(labels=[])
+        mock_api = self._patch_deps(mocker, [task])
+        mocker.patch("builtins.input", return_value="")
+
+        with pytest.raises(SystemExit, match="Aborted"):
+            main()
+
+        mock_api.update_task.assert_not_called()
+
+    def test_no_prompt_when_labels_already_correct(self, mocker):
+        # Task already has grade:C — no pending changes, no prompt
+        task = self._make_recurring_task(labels=["grade:C"])
+        mock_api = self._patch_deps(mocker, [task])
+        mock_input = mocker.patch("builtins.input")
+
+        main()
+
+        mock_input.assert_not_called()
+        mock_api.update_task.assert_not_called()
+
+    def test_dry_run_skips_prompt_and_writes(self, mocker):
+        task = self._make_recurring_task(labels=[])
+        mock_api = self._patch_deps(mocker, [task], argv=["grader.py", "--dry-run"])
+        mock_input = mocker.patch("builtins.input")
+
+        main()
+
+        mock_input.assert_not_called()
+        mock_api.update_task.assert_not_called()

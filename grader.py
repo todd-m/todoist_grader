@@ -354,36 +354,40 @@ def main() -> None:
     # ── Apply labels ───────────────────────────────────────────────────────
     print("\nApplying grade labels…")
     grade_label_set = set(GRADE_LABEL_NAMES)
-    changed = 0
 
+    # Collect pending changes first so we can preview before writing
+    pending = []
     for r in results:
         task      = r["task"]
         new_label = f"grade:{r['grade']}"
         old       = list(task.labels or [])
-        filtered  = [lbl for lbl in old if lbl not in grade_label_set]
-        new       = filtered + [new_label]
+        new       = [lbl for lbl in old if lbl not in grade_label_set] + [new_label]
+        if set(old) != set(new):
+            pending.append({
+                "task":       task,
+                "new_labels": new,
+                "line":       (f"  {task.content!r:50s}  "
+                               f"rate={r['rate']:5.1%}  →  grade:{r['grade']}"),
+            })
 
-        if set(old) == set(new):
-            continue  # already correct, skip
-
-        changed += 1
-        line = (
-            f"  {task.content!r:50s}  "
-            f"rate={r['rate']:5.1%}  →  grade:{r['grade']}"
-        )
-        if args.dry_run:
-            # With --today, only print dry-run lines for tasks due today
-            if not args.today or (task.due and str(task.due.date)[:10] == today_str):
-                print(f"[dry-run]{line}")
-        else:
-            api.update_task(task_id=task.id, labels=new)
-            print(line)
-            time.sleep(write_delay)   # respect Todoist rate limits
-
-    if changed == 0:
+    if not pending:
         print("  All tasks already have the correct grade label.")
-    elif not args.dry_run:
-        print(f"\n  {changed} task(s) updated.")
+    elif args.dry_run:
+        for p in pending:
+            if not args.today or (p["task"].due and str(p["task"].due.date)[:10] == today_str):
+                print(f"[dry-run]{p['line']}")
+    else:
+        print(f"  {len(pending)} task(s) will be updated:")
+        for p in pending:
+            print(p["line"])
+        answer = input("\n  Apply these changes? [y/N] ").strip().lower()
+        if answer != "y":
+            sys.exit("  Aborted.")
+        for p in pending:
+            api.update_task(task_id=p["task"].id, labels=p["new_labels"])
+            print(f"  Updated: {p['task'].content!r}")
+            time.sleep(write_delay)
+        print(f"\n  {len(pending)} task(s) updated.")
 
     if nr_snoozed:
         print(f"\n{nr_header}:")
