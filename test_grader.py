@@ -405,6 +405,10 @@ class TestTodayFilter:
     """
     The --today filter is applied in main() after nonrecurring_snooze_report
     and after computing results.  We test the predicate directly here.
+
+    Todoist returns due.date as either "YYYY-MM-DD" (all-day tasks) or a full
+    datetime string like "2026-03-01T09:00:00Z" (timed tasks).  The filter
+    must handle both formats by slicing [:10].
     """
 
     def _row(self, due_date: str | None):
@@ -416,11 +420,27 @@ class TestTodayFilter:
         return {"task": task, "snoozes": 1, "comps": 0, "rate": 0.0, "grade": "C"}
 
     def _apply_filter(self, rows, today_str):
-        return [r for r in rows if r["task"].due and r["task"].due.date == today_str]
+        # Mirror the exact predicate used in grader.py main()
+        return [r for r in rows
+                if r["task"].due and str(r["task"].due.date)[:10] == today_str]
 
-    def test_keeps_tasks_due_today(self):
+    def test_keeps_tasks_due_today_date_only(self):
+        # Plain date string "YYYY-MM-DD"
         today = datetime.now().strftime("%Y-%m-%d")
         rows = [self._row(today)]
+        assert len(self._apply_filter(rows, today)) == 1
+
+    def test_keeps_tasks_due_today_with_datetime_string(self):
+        # Todoist sometimes returns timed tasks as "YYYY-MM-DDTHH:MM:SSZ"
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = [self._row(f"{today}T09:00:00Z")]
+        assert len(self._apply_filter(rows, today)) == 1
+
+    def test_keeps_tasks_due_today_with_datetime_object(self):
+        # Regression: todoist-api-python v3 SDK returns due.date as datetime.datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        dt_obj = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        rows = [self._row(dt_obj)]
         assert len(self._apply_filter(rows, today)) == 1
 
     def test_excludes_tasks_due_other_days(self):
@@ -435,8 +455,10 @@ class TestTodayFilter:
 
     def test_mixed_due_dates(self):
         today = datetime.now().strftime("%Y-%m-%d")
-        rows = [self._row(today), self._row("2020-01-01"), self._row(None)]
-        assert len(self._apply_filter(rows, today)) == 1
+        dt_obj = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
+        rows = [self._row(today), self._row(dt_obj),
+                self._row("2020-01-01"), self._row(None)]
+        assert len(self._apply_filter(rows, today)) == 2
 
 
 # ---------------------------------------------------------------------------

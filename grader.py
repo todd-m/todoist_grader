@@ -338,7 +338,7 @@ def main() -> None:
     nr_snoozed = nonrecurring_snooze_report(all_tasks, updated_events)
     if args.today:
         today_str      = datetime.now().strftime("%Y-%m-%d")
-        def _due_today(r): return r["task"].due and r["task"].due.date == today_str
+        def _due_today(r): return r["task"].due and str(r["task"].due.date)[:10] == today_str
         report_results  = [r for r in results   if _due_today(r)]
         nr_snoozed      = [r for r in nr_snoozed if _due_today(r)]
         recurring_title = f"Recurring Tasks Due Today  (grades over past {days} days)"
@@ -373,7 +373,7 @@ def main() -> None:
         )
         if args.dry_run:
             # With --today, only print dry-run lines for tasks due today
-            if not args.today or (task.due and task.due.date == today_str):
+            if not args.today or (task.due and str(task.due.date)[:10] == today_str):
                 print(f"[dry-run]{line}")
         else:
             api.update_task(task_id=task.id, labels=new)
