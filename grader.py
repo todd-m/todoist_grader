@@ -218,6 +218,38 @@ def count_snoozes(
     return count
 
 
+def nonrecurring_snooze_report(
+    all_tasks: list,
+    updated_events: list[dict],
+) -> list[dict]:
+    """
+    Return snooze counts for non-recurring tasks that were snoozed at least once.
+
+    A snooze = an 'updated' activity event with extra_data.last_due_date present.
+    No completion-date exclusion (non-recurring tasks are not graded on completion).
+    Sorted by snooze count descending.
+    """
+    recurring_ids = {str(t.id) for t in all_tasks if t.due and t.due.is_recurring}
+    task_map = {str(t.id): t for t in all_tasks}
+
+    snooze_counts: dict[str, int] = {}
+    for event in updated_events:
+        tid = str(event.get("object_id", ""))
+        if tid in recurring_ids:
+            continue
+        extra = event.get("extra_data") or {}
+        if "last_due_date" not in extra:
+            continue
+        snooze_counts[tid] = snooze_counts.get(tid, 0) + 1
+
+    rows = [
+        {"task": task_map[tid], "snoozes": n}
+        for tid, n in snooze_counts.items()
+        if tid in task_map
+    ]
+    return sorted(rows, key=lambda r: -r["snoozes"])
+
+
 def assign_grade(rate: float, thresholds: dict) -> str:
     if rate >= float(thresholds.get("A", 0.85)):
         return "A"
@@ -330,6 +362,13 @@ def main() -> None:
     elif not args.dry_run:
         print(f"\n  {changed} task(s) updated.")
 
+    # ── Non-recurring snooze report ────────────────────────────────────────
+    nr_snoozed = nonrecurring_snooze_report(all_tasks, updated_events)
+    if nr_snoozed:
+        print(f"\nNon-recurring tasks snoozed in the past {days} days:")
+        for r in nr_snoozed:
+            print(f"  {r['snoozes']:3d}x  {r['task'].content!r}")
+
     # ── Summary table ──────────────────────────────────────────────────────
     if args.summary:
         grade_style = {"A": "bold green", "B": "bold yellow", "C": "bold red"}
@@ -360,6 +399,20 @@ def main() -> None:
             )
 
         console.print(table)
+
+        if nr_snoozed:
+            nr_table = Table(
+                title=f"Non-Recurring Tasks: Snooze Counts  (past {days} days)",
+                show_header=True,
+                header_style="bold",
+                border_style="dim",
+                show_lines=False,
+            )
+            nr_table.add_column("Task",    style="cyan", no_wrap=False, max_width=55)
+            nr_table.add_column("Snoozes", justify="right")
+            for r in nr_snoozed:
+                nr_table.add_row(r["task"].content, str(r["snoozes"]))
+            console.print(nr_table)
 
 
 if __name__ == "__main__":

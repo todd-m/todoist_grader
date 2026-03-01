@@ -21,6 +21,7 @@ from grader import (
     ensure_grade_labels,
     fetch_item_activities,
     load_config,
+    nonrecurring_snooze_report,
 )
 
 
@@ -394,6 +395,84 @@ class TestEnsureGradeLabels:
         assert colour_map["grade:A"] == "green"
         assert colour_map["grade:B"] == "yellow"
         assert colour_map["grade:C"] == "red"
+
+
+# ---------------------------------------------------------------------------
+# nonrecurring_snooze_report
+# ---------------------------------------------------------------------------
+
+class TestNonrecurringSnoozReport:
+    def _task(self, id, is_recurring=False):
+        due = SimpleNamespace(is_recurring=is_recurring) if is_recurring else None
+        return SimpleNamespace(id=id, content=f"task-{id}", due=due)
+
+    def _update_event(self, object_id, has_last_due=True):
+        return {
+            "object_id": str(object_id),
+            "event_date": "2024-03-01T12:00:00Z",
+            "extra_data": {"last_due_date": "2024-03-01"} if has_last_due else {},
+        }
+
+    def test_returns_snoozed_nonrecurring_tasks(self):
+        tasks = [self._task("1"), self._task("2")]
+        events = [self._update_event("1"), self._update_event("1")]
+        rows = nonrecurring_snooze_report(tasks, events)
+        assert len(rows) == 1
+        assert rows[0]["snoozes"] == 2
+
+    def test_excludes_recurring_tasks(self):
+        tasks = [self._task("1", is_recurring=True)]
+        events = [self._update_event("1")]
+        assert nonrecurring_snooze_report(tasks, events) == []
+
+    def test_excludes_events_without_last_due_date(self):
+        tasks = [self._task("1")]
+        events = [self._update_event("1", has_last_due=False)]
+        assert nonrecurring_snooze_report(tasks, events) == []
+
+    def test_excludes_tasks_not_in_all_tasks(self):
+        # Event references a task ID not in the active task list (deleted task)
+        tasks = [self._task("99")]
+        events = [self._update_event("1")]
+        assert nonrecurring_snooze_report(tasks, events) == []
+
+    def test_excludes_tasks_with_zero_snoozes(self):
+        tasks = [self._task("1"), self._task("2")]
+        events = [self._update_event("1")]
+        rows = nonrecurring_snooze_report(tasks, events)
+        assert all(r["task"].id != "2" for r in rows)
+
+    def test_sorted_by_snooze_count_descending(self):
+        tasks = [self._task("1"), self._task("2"), self._task("3")]
+        events = (
+            [self._update_event("2")] * 3 +
+            [self._update_event("1")] * 5 +
+            [self._update_event("3")] * 1
+        )
+        rows = nonrecurring_snooze_report(tasks, events)
+        counts = [r["snoozes"] for r in rows]
+        assert counts == sorted(counts, reverse=True)
+        assert counts == [5, 3, 1]
+
+    def test_returns_empty_when_no_events(self):
+        tasks = [self._task("1")]
+        assert nonrecurring_snooze_report(tasks, []) == []
+
+    def test_returns_empty_when_no_tasks(self):
+        events = [self._update_event("1")]
+        assert nonrecurring_snooze_report([], events) == []
+
+    def test_object_id_coerced_to_string(self):
+        tasks = [self._task("1")]
+        events = [{"object_id": 1, "event_date": "2024-03-01T00:00:00Z",
+                   "extra_data": {"last_due_date": "2024-02-28"}}]
+        rows = nonrecurring_snooze_report(tasks, events)
+        assert len(rows) == 1
+
+    def test_handles_none_extra_data(self):
+        tasks = [self._task("1")]
+        events = [{"object_id": "1", "event_date": "2024-03-01T00:00:00Z", "extra_data": None}]
+        assert nonrecurring_snooze_report(tasks, events) == []
 
 
 # ---------------------------------------------------------------------------
