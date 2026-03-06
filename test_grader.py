@@ -19,10 +19,13 @@ from grader import (
     completion_dates_for,
     count_snoozes,
     ensure_grade_labels,
+    fetch_completed_tasks,
     fetch_item_activities,
     load_config,
     main,
     nonrecurring_snooze_report,
+    print_completed_report,
+    resolve_project_id,
 )
 
 
@@ -687,3 +690,110 @@ class TestConfirmationPrompt:
 
         mock_input.assert_not_called()
         mock_api.update_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# resolve_project_id
+# ---------------------------------------------------------------------------
+
+class TestResolveProjectId:
+    def _make_api(self, project_names):
+        api = MagicMock()
+        projects = [SimpleNamespace(name=n, id=f"id_{n}") for n in project_names]
+        api.get_projects.return_value = [projects]
+        return api
+
+    def test_finds_project_by_exact_name(self):
+        api = self._make_api(["Work", "Personal"])
+        assert resolve_project_id(api, "Work") == "id_Work"
+
+    def test_case_insensitive_match(self):
+        api = self._make_api(["My Project"])
+        assert resolve_project_id(api, "my project") == "id_My Project"
+
+    def test_exits_when_not_found(self):
+        api = self._make_api(["Work"])
+        with pytest.raises(SystemExit):
+            resolve_project_id(api, "Nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# fetch_completed_tasks
+# ---------------------------------------------------------------------------
+
+class TestFetchCompletedTasks:
+    SINCE = datetime(2024, 2, 27, tzinfo=timezone.utc)
+
+    @patch("grader.requests.get")
+    def test_returns_items_matching_project(self, mock_get):
+        mock_get.return_value = make_response({"items": [
+            {"id": "1", "content": "Task A", "project_id": "proj_1", "completed_at": "2024-03-01T09:00:00Z"},
+            {"id": "2", "content": "Task B", "project_id": "proj_2", "completed_at": "2024-03-02T09:00:00Z"},
+            {"id": "3", "content": "Task C", "project_id": "proj_1", "completed_at": "2024-03-03T09:00:00Z"},
+        ]})
+        result = fetch_completed_tasks("tok", self.SINCE, "proj_1")
+        assert len(result) == 2
+        assert all(t["project_id"] == "proj_1" for t in result)
+
+    @patch("grader.requests.get")
+    def test_sends_correct_params(self, mock_get):
+        mock_get.return_value = make_response({"items": []})
+        fetch_completed_tasks("tok", self.SINCE, "proj_1")
+        _, kwargs = mock_get.call_args
+        params = kwargs["params"]
+        assert "project_id" not in params  # filtered client-side
+        assert params["limit"] == 200
+        assert "since" in params
+        assert "until" in params
+
+    @patch("grader.requests.get")
+    def test_paginates_via_next_cursor(self, mock_get):
+        page1 = make_response({
+            "items": [{"id": str(i), "project_id": "p1"} for i in range(200)],
+            "next_cursor": "cursor_abc",
+        })
+        page2 = make_response({"items": [{"id": "last", "project_id": "p1"}]})
+        mock_get.side_effect = [page1, page2]
+        result = fetch_completed_tasks("tok", self.SINCE, "p1")
+        assert len(result) == 201
+        assert mock_get.call_count == 2
+
+    @patch("grader.requests.get")
+    def test_returns_empty_when_no_items(self, mock_get):
+        mock_get.return_value = make_response({"items": []})
+        assert fetch_completed_tasks("tok", self.SINCE, "proj_1") == []
+
+    @patch("grader.requests.get")
+    def test_returns_empty_when_no_project_match(self, mock_get):
+        mock_get.return_value = make_response({"items": [
+            {"id": "1", "project_id": "other"},
+        ]})
+        assert fetch_completed_tasks("tok", self.SINCE, "proj_1") == []
+
+    @patch("grader.requests.get")
+    def test_raises_on_http_error(self, mock_get):
+        mock_get.return_value = make_response({}, status_code=500)
+        with pytest.raises(requests.HTTPError):
+            fetch_completed_tasks("tok", self.SINCE, "proj_1")
+
+
+# ---------------------------------------------------------------------------
+# print_completed_report
+# ---------------------------------------------------------------------------
+
+class TestPrintCompletedReport:
+    def test_prints_table_with_tasks(self, capsys):
+        completed = [
+            {"content": "Task A", "completed_at": "2024-03-02T09:00:00Z"},
+            {"content": "Task B", "completed_at": "2024-03-01T10:00:00Z"},
+        ]
+        print_completed_report(completed, "Work", 7)
+        out = capsys.readouterr().out
+        assert "Task A" in out
+        assert "Task B" in out
+        assert "2 task(s)" in out
+
+    def test_prints_zero_tasks(self, capsys):
+        print_completed_report([], "Work", 7)
+        out = capsys.readouterr().out
+        assert "0 task(s)" in out

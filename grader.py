@@ -51,6 +51,7 @@ from rich.table import Table
 from todoist_api_python.api import TodoistAPI
 
 ACTIVITIES_URL = "https://api.todoist.com/api/v1/activities"
+COMPLETED_URL  = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
 
 # The three label names this script manages
 GRADE_LABEL_NAMES: tuple[str, ...] = ("grade:A", "grade:B", "grade:C")
@@ -95,6 +96,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--today", action="store_true",
         help="Filter reports to tasks due today (recurring and non-recurring)",
+    )
+    parser.add_argument(
+        "--completed", action="store_true",
+        help="Show completed tasks for a project over the past N days",
+    )
+    parser.add_argument(
+        "--project", metavar="NAME",
+        help="Project name (used with --completed)",
+    )
+    parser.add_argument(
+        "--days", type=int, default=None,
+        help="Lookback window in days (default: 7 for --completed, config value for grading)",
     )
     return parser.parse_args()
 
@@ -280,6 +293,89 @@ def ensure_grade_labels(api: TodoistAPI, dry_run: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Completed-tasks report
+# ---------------------------------------------------------------------------
+
+def resolve_project_id(api: TodoistAPI, name: str) -> str:
+    """Look up a Todoist project by name (case-insensitive). Exit if not found."""
+    for page in api.get_projects():
+        if isinstance(page, list):
+            projects = page
+        else:
+            projects = [page]
+        for proj in projects:
+            if proj.name.lower() == name.lower():
+                return str(proj.id)
+    sys.exit(f"Project not found: {name!r}")
+
+
+def fetch_completed_tasks(token: str, since: datetime, project_id: str) -> list[dict]:
+    """
+    Return completed tasks for *project_id* since *since* via
+    /api/v1/tasks/completed/by_completion_date.
+
+    The endpoint does not support a project_id filter, so we fetch all
+    completed tasks in the window and filter client-side.
+    """
+    all_items: list[dict] = []
+    cursor: str | None = None
+
+    while True:
+        params: dict = {
+            "since": since.isoformat(),
+            "until": datetime.now(timezone.utc).isoformat(),
+            "limit": 200,
+        }
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = requests.get(
+            COMPLETED_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        chunk = data.get("items", data.get("results", []))
+        all_items.extend(chunk)
+
+        cursor = data.get("next_cursor")
+        if not cursor or len(chunk) < 200:
+            break
+
+    return [t for t in all_items if str(t.get("project_id", "")) == project_id]
+
+
+def print_completed_report(completed: list[dict], project_name: str, days: int) -> None:
+    """Render a Rich table of completed tasks."""
+    console = Console()
+
+    completed_sorted = sorted(
+        completed,
+        key=lambda t: t.get("completed_at", ""),
+        reverse=True,
+    )
+
+    table = Table(
+        title=f"Completed Tasks: {project_name}  (past {days} days)",
+        show_header=True,
+        header_style="bold",
+        border_style="dim",
+        show_lines=False,
+    )
+    table.add_column("Completed", style="green", no_wrap=True)
+    table.add_column("Task", style="cyan", no_wrap=False, max_width=55)
+
+    for t in completed_sorted:
+        date_str = (t.get("completed_at") or "")[:10]
+        table.add_row(date_str, t.get("content", ""))
+
+    console.print(table)
+    console.print(f"  [bold]{len(completed)}[/bold] task(s) completed in the past {days} days.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -293,13 +389,27 @@ def main() -> None:
     except KeyError:
         sys.exit("config.toml must have [todoist] api_token")
 
+    api = TodoistAPI(token)
+
+    # ── Completed-tasks report (separate code path) ───────────────────────
+    if args.completed:
+        if not args.project:
+            sys.exit("--completed requires --project <name>")
+        comp_days = args.days if args.days is not None else 7
+        comp_since = datetime.now(timezone.utc) - timedelta(days=comp_days)
+        project_id = resolve_project_id(api, args.project)
+        print(f"Fetching completed tasks for {args.project!r} (past {comp_days} days)…")
+        completed = fetch_completed_tasks(token, comp_since, project_id)
+        print_completed_report(completed, args.project, comp_days)
+        return
+
+    # ── Grading config ────────────────────────────────────────────────────
     grading_cfg = cfg.get("grading", {})
-    days        = int(grading_cfg.get("days", 30))
+    days        = args.days if args.days is not None else int(grading_cfg.get("days", 30))
     thresholds  = grading_cfg.get("thresholds", {"A": 0.85, "B": 0.65})
     write_delay = float(cfg.get("rate_limit", {}).get("write_delay_seconds", 0.5))
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    api   = TodoistAPI(token)
 
     # ── Fetch ──────────────────────────────────────────────────────────────
     print("Fetching tasks…")

@@ -1,6 +1,6 @@
 PYTHON = .venv/bin/python
 
-.PHONY: run dry-run summary today install test
+.PHONY: run dry-run summary today completed install test
 
 run:
 	$(PYTHON) grader.py
@@ -13,6 +13,9 @@ summary:
 
 today:
 	$(PYTHON) grader.py --dry-run --summary --today
+
+completed:
+	$(PYTHON) grader.py --completed --project "$(PROJECT)"
 
 install:
 	python3 -m venv .venv
