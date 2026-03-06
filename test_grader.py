@@ -693,6 +693,33 @@ class TestConfirmationPrompt:
 
 
 # ---------------------------------------------------------------------------
+# --completed passes midnight-truncated since to fetch_completed_tasks
+# ---------------------------------------------------------------------------
+
+class TestCompletedSinceMidnight:
+    def test_since_is_truncated_to_midnight(self, mocker):
+        mock_api = MagicMock()
+        mock_api.get_projects.return_value = [
+            [SimpleNamespace(name="Work", id="proj_1")]
+        ]
+        mocker.patch("grader.load_config", return_value={
+            "todoist": {"api_token": "fake"},
+        })
+        mocker.patch("grader.TodoistAPI", return_value=mock_api)
+        mock_fetch = mocker.patch("grader.fetch_completed_tasks", return_value=[])
+        mocker.patch("grader.print_completed_report")
+        mocker.patch("sys.argv", ["grader.py", "--completed", "--project", "Work", "--days", "7"])
+
+        main()
+
+        since_arg = mock_fetch.call_args[0][1]  # second positional arg
+        assert since_arg.hour == 0
+        assert since_arg.minute == 0
+        assert since_arg.second == 0
+        assert since_arg.microsecond == 0
+
+
+# ---------------------------------------------------------------------------
 # resolve_project_id
 # ---------------------------------------------------------------------------
 

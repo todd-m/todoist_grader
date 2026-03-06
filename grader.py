@@ -396,7 +396,9 @@ def main() -> None:
         if not args.project:
             sys.exit("--completed requires --project <name>")
         comp_days = args.days if args.days is not None else 7
-        comp_since = datetime.now(timezone.utc) - timedelta(days=comp_days)
+        comp_since = (datetime.now(timezone.utc) - timedelta(days=comp_days)).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
         project_id = resolve_project_id(api, args.project)
         print(f"Fetching completed tasks for {args.project!r} (past {comp_days} days)…")
         completed = fetch_completed_tasks(token, comp_since, project_id)
