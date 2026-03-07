@@ -15,6 +15,7 @@ import requests
 
 from grader import (
     GRADE_LABEL_NAMES,
+    _all_pages,
     assign_grade,
     completion_dates_for,
     count_snoozes,
@@ -824,3 +825,65 @@ class TestPrintCompletedReport:
         print_completed_report([], "Work", 7)
         out = capsys.readouterr().out
         assert "0 task(s)" in out
+
+
+# ---------------------------------------------------------------------------
+# _all_pages retry behaviour
+# ---------------------------------------------------------------------------
+
+def _http_error(status_code: int) -> requests.exceptions.HTTPError:
+    resp = requests.models.Response()
+    resp.status_code = status_code
+    return requests.exceptions.HTTPError(response=resp)
+
+
+class TestAllPagesRetry:
+    def _paginator(self, pages):
+        """Wrap a list-of-lists as a simple iterator."""
+        return iter(pages)
+
+    def test_returns_flattened_pages_on_success(self):
+        result = _all_pages(self._paginator([["a", "b"], ["c"]]))
+        assert result == ["a", "b", "c"]
+
+    def test_retries_on_503_then_succeeds(self, capsys):
+        call_count = 0
+
+        class FlakyPaginator:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise _http_error(503)
+                if call_count == 2:
+                    return ["item1"]
+                raise StopIteration
+
+        result = _all_pages(FlakyPaginator(), retries=3, backoff=0.0)
+        assert result == ["item1"]
+        assert "retrying" in capsys.readouterr().out
+
+    def test_raises_after_max_retries(self):
+        class AlwaysFails:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise _http_error(503)
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            _all_pages(AlwaysFails(), retries=2, backoff=0.0)
+
+    def test_does_not_retry_on_4xx(self):
+        class ClientError:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise _http_error(401)
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            _all_pages(ClientError(), retries=3, backoff=0.0)

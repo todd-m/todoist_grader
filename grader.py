@@ -116,11 +116,28 @@ def parse_args() -> argparse.Namespace:
 # SDK helper
 # ---------------------------------------------------------------------------
 
-def _all_pages(paginator) -> list:
-    """Flatten a v3 SDK ResultsPaginator into a single list."""
+def _all_pages(paginator, retries: int = 3, backoff: float = 2.0) -> list:
+    """Flatten a v3 SDK ResultsPaginator into a single list, retrying on 5xx errors."""
+    import requests as _requests
     results = []
-    for page in paginator:
-        results.extend(page)
+    page_iter = iter(paginator)
+    attempt = 0
+    while True:
+        try:
+            page = next(page_iter)
+            results.extend(page)
+            attempt = 0  # reset on success
+        except StopIteration:
+            break
+        except _requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code < 500:
+                raise
+            attempt += 1
+            if attempt > retries:
+                raise
+            wait = backoff ** attempt
+            print(f"Todoist API error ({exc}); retrying in {wait:.0f}s… (attempt {attempt}/{retries})")
+            time.sleep(wait)
     return results
 
 
