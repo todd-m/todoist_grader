@@ -510,7 +510,7 @@ class TestNonrecurringSnoozReport:
         rows = nonrecurring_snooze_report(tasks, events)
         assert all(r["task"].id != "2" for r in rows)
 
-    def test_sorted_by_snooze_count_descending(self):
+    def test_sorted_by_snooze_count_ascending(self):
         tasks = [self._task("1"), self._task("2"), self._task("3")]
         events = (
             [self._update_event("2")] * 3 +
@@ -519,8 +519,8 @@ class TestNonrecurringSnoozReport:
         )
         rows = nonrecurring_snooze_report(tasks, events)
         counts = [r["snoozes"] for r in rows]
-        assert counts == sorted(counts, reverse=True)
-        assert counts == [5, 3, 1]
+        assert counts == sorted(counts)
+        assert counts == [1, 3, 5]
 
     def test_returns_empty_when_no_events(self):
         tasks = [self._task("1")]
