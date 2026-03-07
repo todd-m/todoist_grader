@@ -244,7 +244,7 @@ def nonrecurring_snooze_report(
 
     A snooze = an 'updated' activity event with extra_data.last_due_date present.
     No completion-date exclusion (non-recurring tasks are not graded on completion).
-    Sorted by snooze count descending.
+    Sorted by snooze count ascending.
     """
     recurring_ids = {str(t.id) for t in all_tasks if t.due and t.due.is_recurring}
     task_map = {str(t.id): t for t in all_tasks}
@@ -264,7 +264,7 @@ def nonrecurring_snooze_report(
         for tid, n in snooze_counts.items()
         if tid in task_map
     ]
-    return sorted(rows, key=lambda r: -r["snoozes"])
+    return sorted(rows, key=lambda r: r["snoozes"])
 
 
 def assign_grade(rate: float, thresholds: dict) -> str:
