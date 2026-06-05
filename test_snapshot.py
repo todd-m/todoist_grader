@@ -207,3 +207,109 @@ class TestCountFilterTasks:
         with pytest.raises(requests.HTTPError):
             count_filter_tasks("tok", "today", retries=2, backoff=0.0)
         assert mock_get.call_count == 3  # 1 initial + 2 retries
+
+
+import db as db_module
+from snapshot import main
+
+
+class TestMain:
+    def _patched_conn(self, mocker, counts: dict[str, int], prior_rows=None):
+        """
+        Returns an in-memory SQLite connection, pre-populated with prior_rows if given,
+        and patches snapshot.db.init_db to return it.
+        counts: {query_string: count} — used to stub count_filter_tasks.
+        prior_rows: [(created_on, filter_name, task_count), ...]
+        """
+        conn = db_module.init_db(":memory:")
+        if prior_rows:
+            for row in prior_rows:
+                db_module.write_snapshot(conn, *row)
+
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {"filters": ["next 7 days"], "db_path": "irrelevant"},
+        })
+        mocker.patch("snapshot.fetch_todoist_filters", return_value={
+            "next 7 days": ("Next 7 Days", "7 days"),
+        })
+        mocker.patch(
+            "snapshot.count_filter_tasks",
+            side_effect=lambda tok, q, **kw: counts.get(q, 0),
+        )
+        mocker.patch("snapshot.db.init_db", return_value=conn)
+        return conn
+
+    def _patch_date(self, mocker, iso: str):
+        mock_date = MagicMock()
+        mock_date.today.return_value.isoformat.return_value = iso
+        mocker.patch("snapshot.date", mock_date)
+
+    def test_prints_filter_name_and_count(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 42})
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        out = capsys.readouterr().out
+        assert "Next 7 Days" in out
+        assert "42" in out
+
+    def test_shows_dash_when_no_prior(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 42})
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert "—" in capsys.readouterr().out  # em dash
+
+    def test_shows_positive_delta(self, mocker, capsys):
+        self._patched_conn(
+            mocker,
+            counts={"7 days": 42},
+            prior_rows=[("2026-06-04", "Next 7 Days", 39)],
+        )
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert "+3" in capsys.readouterr().out
+
+    def test_shows_negative_delta(self, mocker, capsys):
+        self._patched_conn(
+            mocker,
+            counts={"7 days": 40},
+            prior_rows=[("2026-06-04", "Next 7 Days", 45)],
+        )
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert "-5" in capsys.readouterr().out
+
+    def test_shows_zero_delta(self, mocker, capsys):
+        self._patched_conn(
+            mocker,
+            counts={"7 days": 42},
+            prior_rows=[("2026-06-04", "Next 7 Days", 42)],
+        )
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        out = capsys.readouterr().out
+        assert "42" in out
+
+    def test_exits_when_snapshots_section_missing(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+        })
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_exits_when_filters_empty(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {"filters": [], "db_path": "irrelevant"},
+        })
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_exits_when_no_filters_matched(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {"filters": ["bogus filter"], "db_path": "irrelevant"},
+        })
+        mocker.patch("snapshot.fetch_todoist_filters", return_value={})
+        with pytest.raises(SystemExit):
+            main()

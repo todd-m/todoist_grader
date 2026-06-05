@@ -90,7 +90,68 @@ def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float 
 
 
 def main() -> None:
-    raise NotImplementedError
+    cfg = load_config()
+
+    try:
+        token = cfg["todoist"]["api_token"]
+    except KeyError:
+        sys.exit("config.toml must have [todoist] api_token")
+
+    snap_cfg = cfg.get("snapshots")
+    if not snap_cfg:
+        sys.exit("config.toml must have a [snapshots] section")
+
+    config_names: list[str] = snap_cfg.get("filters", [])
+    if not config_names:
+        sys.exit("[snapshots] filters must not be empty")
+
+    db_path: str = snap_cfg.get("db_path", "snapshots.db")
+
+    print("Fetching Todoist filters…")
+    todoist_filters = fetch_todoist_filters(token)
+
+    resolved = resolve_filters(config_names, todoist_filters)
+    if not resolved:
+        sys.exit("No configured filters matched any Todoist filter. Aborting.")
+
+    today = date.today().isoformat()
+
+    print("Counting tasks…")
+    counts: dict[str, int] = {}
+    for _config_name, display_name, query in resolved:
+        n = count_filter_tasks(token, query)
+        counts[display_name] = n
+        print(f"  {display_name}: {n}")
+
+    conn = db.init_db(db_path)
+    for display_name, n in counts.items():
+        db.write_snapshot(conn, today, display_name, n)
+
+    prior = db.read_latest_before(conn, today)
+    conn.close()
+
+    console = Console()
+    table = Table(
+        title=f"Task Snapshots — {today}",
+        show_header=True,
+        header_style="bold",
+        border_style="dim",
+    )
+    table.add_column("Filter",  style="cyan")
+    table.add_column("Count",   justify="right")
+    table.add_column("Δ prior", justify="right")
+
+    for _config_name, display_name, _query in resolved:
+        n = counts[display_name]
+        prior_n = prior.get(display_name)
+        if prior_n is None:
+            delta_str = "—"
+        else:
+            delta = n - prior_n
+            delta_str = f"+{delta}" if delta > 0 else str(delta)
+        table.add_row(display_name, str(n), delta_str)
+
+    console.print(table)
 
 
 if __name__ == "__main__":
