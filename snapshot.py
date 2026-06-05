@@ -56,7 +56,37 @@ def resolve_filters(
 
 
 def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float = 2.0) -> int:
-    raise NotImplementedError
+    headers = {"Authorization": f"Bearer {token}"}
+    count = 0
+    cursor: str | None = None
+
+    while True:
+        params: dict = {"query": query, "limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+
+        attempt = 0
+        while True:
+            resp = requests.get(FILTER_URL, headers=headers, params=params, timeout=15)
+            try:
+                resp.raise_for_status()
+                break
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code < 500:
+                    raise
+                attempt += 1
+                if attempt > retries:
+                    raise
+                time.sleep(backoff ** attempt)
+
+        data = resp.json()
+        results = data.get("results", [])
+        count += len(results)
+        cursor = data.get("next_cursor")
+        if not cursor or len(results) < 200:
+            break
+
+    return count
 
 
 def main() -> None:

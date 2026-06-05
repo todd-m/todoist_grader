@@ -160,3 +160,47 @@ class TestResolveFilters:
         assert len(result) == 1
         assert result[0][1] == "Next 7 Days"
         assert "bogus" in capsys.readouterr().err
+
+
+class TestCountFilterTasks:
+    @patch("snapshot.requests.get")
+    def test_counts_single_page(self, mock_get):
+        mock_get.return_value = _make_resp({"results": [{}] * 5})
+        assert count_filter_tasks("tok", "today") == 5
+
+    @patch("snapshot.requests.get")
+    def test_paginates_to_count_all(self, mock_get):
+        mock_get.side_effect = [
+            _make_resp({"results": [{}] * 200, "next_cursor": "c1"}),
+            _make_resp({"results": [{}] * 10}),
+        ]
+        assert count_filter_tasks("tok", "today") == 210
+
+    @patch("snapshot.requests.get")
+    def test_sends_query_and_auth(self, mock_get):
+        mock_get.return_value = _make_resp({"results": []})
+        count_filter_tasks("tok", "next 7 days & !subtask")
+        kwargs = mock_get.call_args.kwargs
+        assert kwargs["params"]["query"] == "next 7 days & !subtask"
+        assert kwargs["headers"]["Authorization"] == "Bearer tok"
+
+    @patch("snapshot.requests.get")
+    def test_raises_immediately_on_4xx(self, mock_get):
+        mock_get.return_value = _make_resp({}, status_code=401)
+        with pytest.raises(requests.HTTPError):
+            count_filter_tasks("tok", "today")
+
+    @patch("snapshot.requests.get")
+    def test_retries_on_5xx_then_succeeds(self, mock_get):
+        mock_get.side_effect = [
+            _make_resp({}, status_code=503),
+            _make_resp({"results": [{}] * 3}),
+        ]
+        assert count_filter_tasks("tok", "today", retries=3, backoff=0.0) == 3
+
+    @patch("snapshot.requests.get")
+    def test_raises_after_max_retries(self, mock_get):
+        mock_get.return_value = _make_resp({}, status_code=503)
+        with pytest.raises(requests.HTTPError):
+            count_filter_tasks("tok", "today", retries=2, backoff=0.0)
+        assert mock_get.call_count == 3  # 1 initial + 2 retries
