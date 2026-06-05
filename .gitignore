@@ -12,3 +12,6 @@ config.toml
 
 # macOS
 .DS_Store
+
+# Snapshot database
+snapshots.db
