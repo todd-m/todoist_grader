@@ -5,7 +5,8 @@ import pytest
 import requests
 
 import db
-from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks
+import db as db_module
+from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks, main
 
 
 # DB tests use a real in-memory SQLite connection — no mocking needed since sqlite3 has no I/O cost.
@@ -179,6 +180,14 @@ class TestCountFilterTasks:
         assert second_params["cursor"] == "c1"
 
     @patch("snapshot.requests.get")
+    def test_partial_page_with_cursor_continues_paginating(self, mock_get):
+        mock_get.side_effect = [
+            _make_resp({"results": [{}] * 50, "next_cursor": "c1"}),
+            _make_resp({"results": [{}] * 30}),
+        ]
+        assert count_filter_tasks("tok", "today") == 80
+
+    @patch("snapshot.requests.get")
     def test_sends_query_and_auth(self, mock_get):
         mock_get.return_value = _make_resp({"results": []})
         count_filter_tasks("tok", "next 7 days & !subtask")
@@ -207,10 +216,6 @@ class TestCountFilterTasks:
         with pytest.raises(requests.HTTPError):
             count_filter_tasks("tok", "today", retries=2, backoff=0.0)
         assert mock_get.call_count == 3  # 1 initial + 2 retries
-
-
-import db as db_module
-from snapshot import main
 
 
 class TestMain:
@@ -289,6 +294,8 @@ class TestMain:
         main()
         out = capsys.readouterr().out
         assert "42" in out
+        assert "0" in out       # delta column shows "0", not em dash or blank
+        assert "+0" not in out  # zero delta must not be formatted as "+0"
 
     def test_exits_when_snapshots_section_missing(self, mocker):
         mocker.patch("snapshot.load_config", return_value={

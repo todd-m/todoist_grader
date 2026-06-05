@@ -83,7 +83,7 @@ def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float 
         results = data.get("results", [])
         count += len(results)
         cursor = data.get("next_cursor")
-        if not cursor or len(results) < 200:
+        if not cursor:
             break
 
     return count
@@ -124,11 +124,12 @@ def main() -> None:
         print(f"  {display_name}: {n}")
 
     conn = db.init_db(db_path)
-    for display_name, n in counts.items():
-        db.write_snapshot(conn, today, display_name, n)
-
-    prior = db.read_latest_before(conn, today)
-    conn.close()
+    try:
+        for display_name, n in counts.items():
+            db.write_snapshot(conn, today, display_name, n)
+        prior = db.read_latest_before(conn, today)
+    finally:
+        conn.close()
 
     console = Console()
     table = Table(
