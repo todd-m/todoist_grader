@@ -175,6 +175,8 @@ class TestCountFilterTasks:
             _make_resp({"results": [{}] * 10}),
         ]
         assert count_filter_tasks("tok", "today") == 210
+        second_params = mock_get.call_args_list[1].kwargs["params"]
+        assert second_params["cursor"] == "c1"
 
     @patch("snapshot.requests.get")
     def test_sends_query_and_auth(self, mock_get):
@@ -197,6 +199,7 @@ class TestCountFilterTasks:
             _make_resp({"results": [{}] * 3}),
         ]
         assert count_filter_tasks("tok", "today", retries=3, backoff=0.0) == 3
+        assert mock_get.call_count == 2
 
     @patch("snapshot.requests.get")
     def test_raises_after_max_retries(self, mock_get):
