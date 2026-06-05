@@ -1,6 +1,11 @@
 import sqlite3
+from unittest.mock import MagicMock, patch
+
 import pytest
+import requests
+
 import db
+from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks
 
 
 # DB tests use a real in-memory SQLite connection — no mocking needed since sqlite3 has no I/O cost.
@@ -78,12 +83,6 @@ class TestReadLatestBefore:
         assert result["next 7 days"] == 30
 
 
-import requests
-from unittest.mock import MagicMock, patch
-
-from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks
-
-
 def _make_resp(json_data, status_code=200):
     resp = MagicMock()
     resp.status_code = status_code
@@ -116,7 +115,7 @@ class TestFetchTodoistFilters:
     def test_sends_correct_payload(self, mock_post):
         mock_post.return_value = _make_resp({"filters": []})
         fetch_todoist_filters("mytoken")
-        _, kwargs = mock_post.call_args
+        kwargs = mock_post.call_args.kwargs
         assert kwargs["json"]["sync_token"] == "*"
         assert kwargs["json"]["resource_types"] == ["filters"]
         assert kwargs["headers"]["Authorization"] == "Bearer mytoken"
