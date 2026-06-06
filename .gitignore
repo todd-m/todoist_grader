@@ -21,3 +21,9 @@ config.toml
 
 # Snapshot database
 snapshots.db
+
+# Visual brainstorming companion
+.superpowers/
+
+# Generated graph
+snapshots_graph.html
