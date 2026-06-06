@@ -340,6 +340,74 @@ class TestMain:
         assert mock_run.called
         assert mock_run.call_args.args[0] == ["open", "snapshots_graph.html"]
 
+    def test_no_solo_filters_calls_render_page_with_one_chart(self, mocker):
+        self._patched_conn(mocker, counts={"7 days": 42})
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert mock_render.called
+        charts, _ = mock_render.call_args.args
+        assert len(charts) == 1
+
+    def test_solo_filter_calls_render_page_with_two_charts(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {
+                "filters": ["next 7 days", "next 30 days"],
+                "db_path": "irrelevant",
+                "solo_filters": ["next 30 days"],
+            },
+        })
+        mocker.patch("snapshot.fetch_todoist_filters", return_value={
+            "next 7 days":  ("Next 7 Days",  "7 days"),
+            "next 30 days": ("Next 30 Days", "30 days"),
+        })
+        mocker.patch(
+            "snapshot.count_filter_tasks",
+            side_effect=lambda tok, q, **kw: {"7 days": 10, "30 days": 100}.get(q, 0),
+        )
+        import db as db_module
+        conn = db_module.init_db(":memory:")
+        mocker.patch("snapshot.db.init_db", return_value=conn)
+        mocker.patch("snapshot.graph.write_graph")
+        mocker.patch("snapshot.subprocess.run")
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        charts, _ = mock_render.call_args.args
+        assert len(charts) == 2
+        subtitles = [sub for _, sub in charts]
+        assert "" in subtitles
+        assert "Next 30 Days" in subtitles
+
+    def test_solo_filter_matching_is_case_insensitive(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {
+                "filters": ["next 7 days"],
+                "db_path": "irrelevant",
+                "solo_filters": ["NEXT 7 DAYS"],
+            },
+        })
+        mocker.patch("snapshot.fetch_todoist_filters", return_value={
+            "next 7 days": ("Next 7 Days", "7 days"),
+        })
+        mocker.patch(
+            "snapshot.count_filter_tasks",
+            side_effect=lambda tok, q, **kw: 42,
+        )
+        import db as db_module
+        conn = db_module.init_db(":memory:")
+        mocker.patch("snapshot.db.init_db", return_value=conn)
+        mocker.patch("snapshot.graph.write_graph")
+        mocker.patch("snapshot.subprocess.run")
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        charts, _ = mock_render.call_args.args
+        subtitles = [sub for _, sub in charts]
+        assert "Next 7 Days" in subtitles
+
 
 class TestReadLastNDays:
     def test_returns_last_7_days_and_excludes_older(self, conn):
