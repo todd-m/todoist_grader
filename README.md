@@ -108,7 +108,8 @@ Add to `config.toml`:
 
 ```toml
 [snapshots]
-db_path = "snapshots.db"   # SQLite file path (gitignored)
+db_path = "snapshots.db"          # SQLite file path (gitignored)
+graph_path = "snapshots_graph.html"  # optional; this is the default
 
 filters = [
   "next 7 days",
@@ -117,6 +118,8 @@ filters = [
 ```
 
 Filter names are matched case-insensitively against your saved Todoist filters. Any name with no match is warned and skipped.
+
+After printing the table, `make snapshot` also generates `snapshots_graph.html` — a Chart.js line chart showing the last 7 days of task counts (one series per filter) — and opens it in your browser. The page respects the system dark/light appearance preference.
 
 ---
 
