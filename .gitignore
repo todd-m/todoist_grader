@@ -7,6 +7,12 @@ venv/
 dist/
 build/
 
+# Claude stuff
+.claude/
+CLAUDE.md
+HANDOFF.md
+docs/
+
 # Config with secrets
 config.toml
 
