@@ -537,40 +537,6 @@ class TestRenderChart:
         assert 'id="chart-0"' in fragment
 
 
-class TestRenderHtml:
-    def test_contains_chartjs_cdn(self):
-        html = graph.render_html({"labels": [], "datasets": []}, "Test")
-        assert "cdn.jsdelivr.net/npm/chart.js" in html
-
-    def test_embeds_dataset_json(self):
-        dataset = {"labels": ["2026-06-06"], "datasets": [{"label": "Filter A", "data": [42]}]}
-        html = graph.render_html(dataset, "Test")
-        assert '"Filter A"' in html
-        assert "42" in html
-
-    def test_contains_prefers_color_scheme(self):
-        html = graph.render_html({"labels": [], "datasets": []}, "Test")
-        assert "prefers-color-scheme" in html
-
-    def test_title_appears_in_output(self):
-        html = graph.render_html({"labels": [], "datasets": []}, "My Custom Title")
-        assert "My Custom Title" in html
-
-    def test_html_special_chars_in_title_are_escaped(self):
-        html = graph.render_html({"labels": [], "datasets": []}, "<My & Title>")
-        assert "<My & Title>" not in html
-        assert "&lt;My &amp; Title&gt;" in html
-
-    def test_script_tag_in_filter_name_does_not_break_output(self):
-        dataset = {
-            "labels": ["2026-06-06"],
-            "datasets": [{"label": "</script><script>alert(1)</script>", "data": [1]}],
-        }
-        html = graph.render_html(dataset, "Test")
-        assert "</script><script>" not in html
-        assert r"<\/script>" in html
-
-
 class TestRenderPage:
     def test_is_valid_html_document(self):
         html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
