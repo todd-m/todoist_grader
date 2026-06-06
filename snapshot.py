@@ -1,4 +1,5 @@
 # snapshot.py
+import subprocess
 import sys
 import time
 import tomllib
@@ -10,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 import db
+import graph
 
 SYNC_URL   = "https://api.todoist.com/api/v1/sync"
 FILTER_URL = "https://api.todoist.com/api/v1/tasks/filter"
@@ -128,6 +130,7 @@ def main() -> None:
         for display_name, n in counts.items():
             db.write_snapshot(conn, today, display_name, n)
         prior = db.read_latest_before(conn, today)
+        history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved])
     finally:
         conn.close()
 
@@ -153,6 +156,14 @@ def main() -> None:
         table.add_row(display_name, str(n), delta_str)
 
     console.print(table)
+    graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
+    dataset = graph.build_dataset(history)
+    html = graph.render_html(dataset, title="Task Snapshots — Last 7 Days")
+    graph.write_graph(html, graph_path)
+    try:
+        subprocess.run(["open", graph_path])
+    except FileNotFoundError:
+        print(f"Graph written to {graph_path}")
 
 
 if __name__ == "__main__":

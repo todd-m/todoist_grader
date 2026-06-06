@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import date, timedelta
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -46,3 +47,27 @@ def read_latest_before(conn: sqlite3.Connection, before_date: str) -> dict[str, 
         (before_date,),
     ).fetchall()
     return {row[0]: row[1] for row in rows}
+
+
+def read_last_n_days(
+    conn: sqlite3.Connection,
+    filter_names: list[str],
+    n: int = 7,
+    as_of: str | None = None,
+) -> dict[str, list[tuple[str, int]]]:
+    if not filter_names:
+        return {}
+    if as_of is None:
+        as_of = date.today().isoformat()
+    start = (date.fromisoformat(as_of) - timedelta(days=n - 1)).isoformat()
+    placeholders = ",".join("?" * len(filter_names))
+    rows = conn.execute(
+        f"SELECT filter_name, created_on, task_count FROM snapshots "
+        f"WHERE filter_name IN ({placeholders}) AND created_on >= ? AND created_on <= ? "
+        f"ORDER BY filter_name, created_on",
+        (*filter_names, start, as_of),
+    ).fetchall()
+    result: dict[str, list[tuple[str, int]]] = {name: [] for name in filter_names}
+    for filter_name, created_on, task_count in rows:
+        result[filter_name].append((created_on, task_count))
+    return result

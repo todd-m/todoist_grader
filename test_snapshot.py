@@ -6,6 +6,7 @@ import requests
 
 import db
 import db as db_module
+import graph
 from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks, main
 
 
@@ -243,6 +244,8 @@ class TestMain:
             side_effect=lambda tok, q, **kw: counts.get(q, 0),
         )
         mocker.patch("snapshot.db.init_db", return_value=conn)
+        mocker.patch("snapshot.graph.write_graph")
+        mocker.patch("snapshot.subprocess.run")
         return conn
 
     def _patch_date(self, mocker, iso: str):
@@ -320,3 +323,143 @@ class TestMain:
         mocker.patch("snapshot.fetch_todoist_filters", return_value={})
         with pytest.raises(SystemExit):
             main()
+
+    def test_calls_write_graph(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 42})
+        mock_write = mocker.patch("snapshot.graph.write_graph")
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert mock_write.called
+        assert mock_write.call_args.args[1] == "snapshots_graph.html"
+
+    def test_opens_graph_in_browser(self, mocker):
+        self._patched_conn(mocker, counts={"7 days": 42})
+        mock_run = mocker.patch("snapshot.subprocess.run")
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert mock_run.called
+        assert mock_run.call_args.args[0] == ["open", "snapshots_graph.html"]
+
+
+class TestReadLastNDays:
+    def test_returns_last_7_days_and_excludes_older(self, conn):
+        for d, count in [
+            ("2026-05-28", 10), ("2026-05-29", 11), ("2026-05-30", 12),
+            ("2026-05-31", 13), ("2026-06-01", 14), ("2026-06-02", 15),
+            ("2026-06-03", 16), ("2026-06-04", 17), ("2026-06-05", 18),
+            ("2026-06-06", 19),
+        ]:
+            db.write_snapshot(conn, d, "Next 7 Days", count)
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
+        assert len(result["Next 7 Days"]) == 7
+        assert result["Next 7 Days"][0] == ("2026-05-31", 13)
+        assert result["Next 7 Days"][-1] == ("2026-06-06", 19)
+
+    def test_missing_days_produce_gap_not_zero(self, conn):
+        db.write_snapshot(conn, "2026-06-04", "Next 7 Days", 10)
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 12)
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
+        assert result["Next 7 Days"] == [("2026-06-04", 10), ("2026-06-06", 12)]
+
+    def test_multiple_filters_returned_separately(self, conn):
+        db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
+        db.write_snapshot(conn, "2026-06-05", "Next 30 Days", 20)
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
+        db.write_snapshot(conn, "2026-06-06", "Next 30 Days", 21)
+        result = db.read_last_n_days(
+            conn, ["Next 7 Days", "Next 30 Days"], n=7, as_of="2026-06-06"
+        )
+        assert result["Next 7 Days"]  == [("2026-06-05", 10), ("2026-06-06", 11)]
+        assert result["Next 30 Days"] == [("2026-06-05", 20), ("2026-06-06", 21)]
+
+    def test_n_equals_1_returns_only_as_of_date(self, conn):
+        db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=1, as_of="2026-06-06")
+        assert result["Next 7 Days"] == [("2026-06-06", 11)]
+
+    def test_returns_empty_list_for_filter_with_no_data(self, conn):
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
+        assert result == {"Next 7 Days": []}
+
+    def test_returns_empty_dict_for_empty_filter_names(self, conn):
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 42)
+        result = db.read_last_n_days(conn, [], n=7, as_of="2026-06-06")
+        assert result == {}
+
+    def test_excludes_rows_after_as_of(self, conn):
+        db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
+        db.write_snapshot(conn, "2026-06-07", "Next 7 Days", 12)  # future row
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
+        assert result["Next 7 Days"] == [("2026-06-05", 10), ("2026-06-06", 11)]
+
+
+class TestBuildDataset:
+    def test_labels_are_sorted_union_of_all_dates(self):
+        rows = {
+            "Next 7 Days":  [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
+            "Next 30 Days": [("2026-06-05", 20), ("2026-06-06", 21)],
+        }
+        result = graph.build_dataset(rows)
+        assert result["labels"] == ["2026-06-04", "2026-06-05", "2026-06-06"]
+
+    def test_missing_date_produces_none_in_series(self):
+        rows = {
+            "Next 7 Days":  [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
+            "Next 30 Days": [("2026-06-05", 20), ("2026-06-06", 21)],
+        }
+        result = graph.build_dataset(rows)
+        next_30 = next(d for d in result["datasets"] if d["label"] == "Next 30 Days")
+        assert next_30["data"] == [None, 20, 21]
+
+    def test_single_filter_single_day(self):
+        rows = {"Next 7 Days": [("2026-06-06", 42)]}
+        result = graph.build_dataset(rows)
+        assert result["labels"] == ["2026-06-06"]
+        assert len(result["datasets"]) == 1
+        assert result["datasets"][0]["label"] == "Next 7 Days"
+        assert result["datasets"][0]["data"] == [42]
+
+    def test_empty_filter_produces_all_none_series(self):
+        rows = {
+            "Next 7 Days":  [("2026-06-06", 42)],
+            "Next 30 Days": [],
+        }
+        result = graph.build_dataset(rows)
+        next_30 = next(d for d in result["datasets"] if d["label"] == "Next 30 Days")
+        assert next_30["data"] == [None]
+
+
+class TestRenderHtml:
+    def test_contains_chartjs_cdn(self):
+        html = graph.render_html({"labels": [], "datasets": []}, "Test")
+        assert "cdn.jsdelivr.net/npm/chart.js" in html
+
+    def test_embeds_dataset_json(self):
+        dataset = {"labels": ["2026-06-06"], "datasets": [{"label": "Filter A", "data": [42]}]}
+        html = graph.render_html(dataset, "Test")
+        assert '"Filter A"' in html
+        assert "42" in html
+
+    def test_contains_prefers_color_scheme(self):
+        html = graph.render_html({"labels": [], "datasets": []}, "Test")
+        assert "prefers-color-scheme" in html
+
+    def test_title_appears_in_output(self):
+        html = graph.render_html({"labels": [], "datasets": []}, "My Custom Title")
+        assert "My Custom Title" in html
+
+    def test_html_special_chars_in_title_are_escaped(self):
+        html = graph.render_html({"labels": [], "datasets": []}, "<My & Title>")
+        assert "<My & Title>" not in html
+        assert "&lt;My &amp; Title&gt;" in html
+
+    def test_script_tag_in_filter_name_does_not_break_output(self):
+        dataset = {
+            "labels": ["2026-06-06"],
+            "datasets": [{"label": "</script><script>alert(1)</script>", "data": [1]}],
+        }
+        html = graph.render_html(dataset, "Test")
+        assert "</script><script>" not in html
+        assert r"<\/script>" in html
