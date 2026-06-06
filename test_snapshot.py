@@ -431,6 +431,40 @@ class TestBuildDataset:
         assert next_30["data"] == [None]
 
 
+class TestRenderChart:
+    def test_canvas_id_contains_index(self):
+        fragment = graph.render_chart({"labels": [], "datasets": []}, "", 3)
+        assert 'id="chart-3"' in fragment
+
+    def test_subtitle_renders_h2_when_non_empty(self):
+        fragment = graph.render_chart({"labels": [], "datasets": []}, "My Filter", 0)
+        assert "<h2>My Filter</h2>" in fragment
+
+    def test_no_h2_when_subtitle_empty(self):
+        fragment = graph.render_chart({"labels": [], "datasets": []}, "", 0)
+        assert "<h2>" not in fragment
+
+    def test_embeds_dataset_json(self):
+        dataset = {"labels": ["2026-06-06"], "datasets": [{"label": "A", "data": [42]}]}
+        fragment = graph.render_chart(dataset, "", 0)
+        assert '"A"' in fragment
+        assert "42" in fragment
+
+    def test_escapes_script_injection(self):
+        dataset = {
+            "labels": ["2026-06-06"],
+            "datasets": [{"label": "</script>xss", "data": [1]}],
+        }
+        fragment = graph.render_chart(dataset, "", 0)
+        assert "</script>xss" not in fragment
+        assert r"<\/script>xss" in fragment
+
+    def test_subtitle_html_special_chars_escaped(self):
+        fragment = graph.render_chart({"labels": [], "datasets": []}, "<bad & title>", 0)
+        assert "<bad & title>" not in fragment
+        assert "&lt;bad &amp; title&gt;" in fragment
+
+
 class TestRenderHtml:
     def test_contains_chartjs_cdn(self):
         html = graph.render_html({"labels": [], "datasets": []}, "Test")

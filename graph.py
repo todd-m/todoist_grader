@@ -29,6 +29,29 @@ def build_dataset(rows: dict[str, list[tuple[str, int]]]) -> dict:
     return {"labels": all_dates, "datasets": datasets}
 
 
+def render_chart(dataset: dict, subtitle: str, index: int) -> str:
+    data_json = json.dumps(dataset).replace("</", r"<\/")
+    canvas_id = f"chart-{index}"
+    heading = f"  <h2>{_html.escape(subtitle)}</h2>\n" if subtitle else ""
+    return f"""{heading}  <div class="chart-container">
+    <canvas id="{canvas_id}"></canvas>
+  </div>
+  <script>
+    new Chart(document.getElementById('{canvas_id}'), {{
+      type: 'line',
+      data: {data_json},
+      options: {{
+        responsive: true,
+        plugins: {{ legend: {{ labels: {{ color: textColor }} }} }},
+        scales: {{
+          x: {{ ticks: {{ color: textColor }}, grid: {{ color: gridColor }} }},
+          y: {{ ticks: {{ color: textColor }}, grid: {{ color: gridColor }}, beginAtZero: false }}
+        }}
+      }}
+    }});
+  </script>"""
+
+
 def render_html(dataset: dict, title: str) -> str:
     data_json = json.dumps(dataset).replace("</", r"<\/")
     title = _html.escape(title)
