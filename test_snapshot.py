@@ -501,3 +501,62 @@ class TestRenderHtml:
         html = graph.render_html(dataset, "Test")
         assert "</script><script>" not in html
         assert r"<\/script>" in html
+
+
+class TestRenderPage:
+    def test_is_valid_html_document(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        assert html.startswith("<!DOCTYPE html>")
+        assert "</html>" in html
+
+    def test_contains_chartjs_cdn(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        assert "cdn.jsdelivr.net/npm/chart.js" in html
+
+    def test_page_title_in_title_tag_and_h1(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "")], "My Page")
+        assert "<title>My Page</title>" in html
+        assert "<h1>My Page</h1>" in html
+
+    def test_title_html_escaped(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "")], "<Page & Title>")
+        assert "<Page & Title>" not in html
+        assert "&lt;Page &amp; Title&gt;" in html
+
+    def test_contains_prefers_color_scheme(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        assert "prefers-color-scheme" in html
+
+    def test_single_chart_has_one_canvas(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        assert html.count("<canvas") == 1
+
+    def test_two_charts_have_two_canvases(self):
+        pair = ({"labels": [], "datasets": []}, "")
+        html = graph.render_page([pair, pair], "Test")
+        assert html.count("<canvas") == 2
+
+    def test_chart_ids_are_unique(self):
+        pair = ({"labels": [], "datasets": []}, "")
+        html = graph.render_page([pair, pair], "Test")
+        assert 'id="chart-0"' in html
+        assert 'id="chart-1"' in html
+
+    def test_subtitle_appears_when_non_empty(self):
+        html = graph.render_page([({"labels": [], "datasets": []}, "View All")], "Test")
+        assert "View All" in html
+
+    def test_embeds_dataset_json(self):
+        dataset = {"labels": ["2026-06-06"], "datasets": [{"label": "Filter A", "data": [42]}]}
+        html = graph.render_page([(dataset, "")], "Test")
+        assert '"Filter A"' in html
+        assert "42" in html
+
+    def test_script_tag_in_filter_name_does_not_break_output(self):
+        dataset = {
+            "labels": ["2026-06-06"],
+            "datasets": [{"label": "</script><script>alert(1)</script>", "data": [1]}],
+        }
+        html = graph.render_page([(dataset, "")], "Test")
+        assert "</script><script>" not in html
+        assert r"<\/script>" in html
