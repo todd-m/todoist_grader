@@ -71,7 +71,54 @@ python grader.py --config ~/my-config.toml
 |------|-------------|
 | `--dry-run` | Print planned changes without writing to Todoist |
 | `--summary` | Print a rich table of all recurring tasks with their rates and grades |
+| `--today` | Filter report to tasks due today |
+| `--completed` | Print a completion report for a project (requires `--project`) |
+| `--project NAME` | Project name for `--completed` |
 | `--config PATH` | Path to config file (default: `config.toml`) |
+
+---
+
+## Daily filter snapshots (`snapshot.py`)
+
+Captures the task count for a set of named Todoist filters once per day, stores them in a local SQLite database, and prints a table showing today's count alongside the delta versus the most recent prior snapshot.
+
+```bash
+make snapshot
+```
+
+```
+Fetching Todoist filters…
+Counting tasks…
+  Next 7 Days: 42
+  Next 30 Days: 118
+                Task Snapshots — 2026-06-06
+┌──────────────┬───────┬─────────┐
+│ Filter       │ Count │ Δ prior │
+├──────────────┼───────┼─────────┤
+│ Next 7 Days  │    42 │      +3 │
+│ Next 30 Days │   118 │      -1 │
+└──────────────┴───────┴─────────┘
+```
+
+The Δ column shows `—` on the first run and `0` / `+N` / `-N` thereafter. Re-running on the same day overwrites today's row (idempotent).
+
+### Config
+
+Add to `config.toml`:
+
+```toml
+[snapshots]
+db_path = "snapshots.db"   # SQLite file path (gitignored)
+
+filters = [
+  "next 7 days",
+  "next 30 days",
+]
+```
+
+Filter names are matched case-insensitively against your saved Todoist filters. Any name with no match is warned and skipped.
+
+---
 
 ## Example output
 
