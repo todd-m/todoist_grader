@@ -464,6 +464,10 @@ class TestRenderChart:
         assert "<bad & title>" not in fragment
         assert "&lt;bad &amp; title&gt;" in fragment
 
+    def test_index_zero_produces_chart_0(self):
+        fragment = graph.render_chart({"labels": [], "datasets": []}, "", 0)
+        assert 'id="chart-0"' in fragment
+
 
 class TestRenderHtml:
     def test_contains_chartjs_cdn(self):

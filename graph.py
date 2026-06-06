@@ -31,7 +31,7 @@ def build_dataset(rows: dict[str, list[tuple[str, int]]]) -> dict:
 
 def render_chart(dataset: dict, subtitle: str, index: int) -> str:
     data_json = json.dumps(dataset).replace("</", r"<\/")
-    canvas_id = f"chart-{index}"
+    canvas_id = f"chart-{int(index)}"
     heading = f"  <h2>{_html.escape(subtitle)}</h2>\n" if subtitle else ""
     return f"""{heading}  <div class="chart-container">
     <canvas id="{canvas_id}"></canvas>
