@@ -156,9 +156,18 @@ def main() -> None:
         table.add_row(display_name, str(n), delta_str)
 
     console.print(table)
+    solo_filter_names = {n.lower() for n in snap_cfg.get("solo_filters", [])}
+    main_rows = {k: v for k, v in history.items() if k.lower() not in solo_filter_names}
+    solo_rows  = {k: v for k, v in history.items() if k.lower() in solo_filter_names}
+
+    charts: list[tuple[dict, str]] = []
+    if main_rows:
+        charts.append((graph.build_dataset(main_rows), ""))
+    for name, series in solo_rows.items():
+        charts.append((graph.build_dataset({name: series}), name))
+
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
-    dataset = graph.build_dataset(history)
-    html = graph.render_html(dataset, title="Task Snapshots — Last 7 Days")
+    html = graph.render_page(charts, "Task Snapshots — Last 7 Days")
     graph.write_graph(html, graph_path)
     try:
         subprocess.run(["open", graph_path])
