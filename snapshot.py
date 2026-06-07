@@ -121,9 +121,9 @@ def main() -> None:
     print("Counting tasks…")
     counts: dict[str, int] = {}
     for _config_name, display_name, query in resolved:
-        n = count_filter_tasks(token, query)
-        counts[display_name] = n
-        print(f"  {display_name}: {n}")
+        tasks = fetch_filter_tasks(token, query)
+        counts[display_name] = len(tasks)
+        print(f"  {display_name}: {len(tasks)}")
 
     conn = db.init_db(db_path)
     try:

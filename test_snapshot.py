@@ -270,7 +270,7 @@ class TestMain:
         """
         Returns an in-memory SQLite connection, pre-populated with prior_rows if given,
         and patches snapshot.db.init_db to return it.
-        counts: {query_string: count} — used to stub count_filter_tasks.
+        counts: {query_string: count} — number of fake tasks returned by fetch_filter_tasks.
         prior_rows: [(created_on, filter_name, task_count), ...]
         """
         conn = db_module.init_db(":memory:")
@@ -286,8 +286,8 @@ class TestMain:
             "next 7 days": ("Next 7 Days", "7 days"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: counts.get(q, 0),
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * counts.get(q, 0),
         )
         mocker.patch("snapshot.db.init_db", return_value=conn)
         mocker.patch("snapshot.graph.write_graph")
@@ -409,8 +409,8 @@ class TestMain:
             "next 30 days": ("Next 30 Days", "30 days"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: {"7 days": 10, "30 days": 100}.get(q, 0),
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * {"7 days": 10, "30 days": 100}.get(q, 0),
         )
         import db as db_module
         conn = db_module.init_db(":memory:")
@@ -439,8 +439,8 @@ class TestMain:
             "next 7 days": ("Next 7 Days", "7 days"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: 42,
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * 42,
         )
         import db as db_module
         conn = db_module.init_db(":memory:")
