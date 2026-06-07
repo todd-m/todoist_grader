@@ -73,7 +73,7 @@ python grader.py --config ~/my-config.toml
 | `--summary` | Print a rich table of all recurring tasks with their rates and grades |
 | `--today` | Filter report to tasks due today |
 | `--completed` | Print a completion report for a project (requires `--project`) |
-| `--project NAME` | Project name for `--completed` |
+| `--project NAME` | Project name for `--completed`; via Make: `make completed PROJECT="Name"` |
 | `--config PATH` | Path to config file (default: `config.toml`) |
 
 ---

@@ -14,6 +14,7 @@ summary:
 today:
 	$(PYTHON) grader.py --dry-run --summary --today
 
+# Usage: make completed PROJECT="ProjectName"
 completed:
 	$(PYTHON) grader.py --completed --project "$(PROJECT)"
 
