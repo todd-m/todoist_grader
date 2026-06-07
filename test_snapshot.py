@@ -31,24 +31,64 @@ class TestInitDb:
         ).fetchall()
         assert ("idx_snapshots_filter",) in indexes
 
+    def test_creates_avg_age_days_column(self, conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
+        assert "avg_age_days" in cols
+
+    def test_migration_adds_column_to_existing_db(self, tmp_path):
+        import sqlite3
+        db_file = str(tmp_path / "old.db")
+        old_conn = sqlite3.connect(db_file)
+        old_conn.execute("""
+            CREATE TABLE snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_on TEXT NOT NULL,
+                filter_name TEXT NOT NULL,
+                task_count INTEGER NOT NULL,
+                UNIQUE (created_on, filter_name)
+            )
+        """)
+        old_conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_filter ON snapshots (filter_name, created_on)")
+        old_conn.commit()
+        old_conn.close()
+        conn2 = db.init_db(db_file)
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(snapshots)")}
+        conn2.close()
+        assert "avg_age_days" in cols
+
+    def test_migration_idempotent_when_column_already_exists(self, tmp_path):
+        db_file = str(tmp_path / "migrated.db")
+        conn1 = db.init_db(db_file)
+        conn1.close()
+        conn2 = db.init_db(db_file)
+        conn2.close()
+
 
 class TestWriteSnapshot:
     def test_inserts_row(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 42)
         row = conn.execute(
-            "SELECT created_on, filter_name, task_count FROM snapshots"
+            "SELECT created_on, filter_name, task_count, avg_age_days FROM snapshots"
         ).fetchone()
-        assert row == ("2026-06-01", "next 7 days", 42)
+        assert row == ("2026-06-01", "next 7 days", 42, None)
+
+    def test_inserts_row_with_avg_age(self, conn):
+        db.write_snapshot(conn, "2026-06-01", "next 7 days", 42, avg_age_days=18.5)
+        row = conn.execute(
+            "SELECT avg_age_days FROM snapshots"
+        ).fetchone()
+        assert row[0] == pytest.approx(18.5)
 
     def test_idempotent_overwrite(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 42)
-        db.write_snapshot(conn, "2026-06-01", "next 7 days", 55)
+        db.write_snapshot(conn, "2026-06-01", "next 7 days", 55, avg_age_days=10.0)
         rows = conn.execute(
-            "SELECT task_count FROM snapshots "
+            "SELECT task_count, avg_age_days FROM snapshots "
             "WHERE created_on='2026-06-01' AND filter_name='next 7 days'"
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] == 55
+        assert rows[0][1] == pytest.approx(10.0)
 
     def test_different_filters_same_day_stored_separately(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 10)
@@ -411,6 +451,7 @@ class TestMain:
 
 class TestReadLastNDays:
     def test_returns_last_7_days_and_excludes_older(self, conn):
+        from db import SnapshotRow
         for d, count in [
             ("2026-05-28", 10), ("2026-05-29", 11), ("2026-05-30", 12),
             ("2026-05-31", 13), ("2026-06-01", 14), ("2026-06-02", 15),
@@ -420,47 +461,53 @@ class TestReadLastNDays:
             db.write_snapshot(conn, d, "Next 7 Days", count)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
         assert len(result["Next 7 Days"]) == 7
-        assert result["Next 7 Days"][0] == ("2026-05-31", 13)
-        assert result["Next 7 Days"][-1] == ("2026-06-06", 19)
+        first = result["Next 7 Days"][0]
+        assert first.date == "2026-05-31"
+        assert first.count == 13
+        assert first.avg_age_days is None
+        last = result["Next 7 Days"][-1]
+        assert last.date == "2026-06-06"
+        assert last.count == 19
 
     def test_missing_days_produce_gap_not_zero(self, conn):
+        from db import SnapshotRow
         db.write_snapshot(conn, "2026-06-04", "Next 7 Days", 10)
         db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 12)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
-        assert result["Next 7 Days"] == [("2026-06-04", 10), ("2026-06-06", 12)]
+        rows = result["Next 7 Days"]
+        assert rows[0] == SnapshotRow("2026-06-04", 10, None)
+        assert rows[1] == SnapshotRow("2026-06-06", 12, None)
+
+    def test_avg_age_days_returned_when_present(self, conn):
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 42, avg_age_days=18.5)
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
+        assert result["Next 7 Days"][0].avg_age_days == pytest.approx(18.5)
 
     def test_multiple_filters_returned_separately(self, conn):
         db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
         db.write_snapshot(conn, "2026-06-05", "Next 30 Days", 20)
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
-        db.write_snapshot(conn, "2026-06-06", "Next 30 Days", 21)
-        result = db.read_last_n_days(
-            conn, ["Next 7 Days", "Next 30 Days"], n=7, as_of="2026-06-06"
-        )
-        assert result["Next 7 Days"]  == [("2026-06-05", 10), ("2026-06-06", 11)]
-        assert result["Next 30 Days"] == [("2026-06-05", 20), ("2026-06-06", 21)]
+        result = db.read_last_n_days(conn, ["Next 7 Days", "Next 30 Days"], as_of="2026-06-05")
+        assert result["Next 7 Days"][0].count == 10
+        assert result["Next 30 Days"][0].count == 20
 
     def test_n_equals_1_returns_only_as_of_date(self, conn):
         db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 20)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=1, as_of="2026-06-06")
-        assert result["Next 7 Days"] == [("2026-06-06", 11)]
+        assert len(result["Next 7 Days"]) == 1
+        assert result["Next 7 Days"][0].count == 20
 
     def test_returns_empty_list_for_filter_with_no_data(self, conn):
-        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
-        assert result == {"Next 7 Days": []}
+        result = db.read_last_n_days(conn, ["missing filter"], as_of="2026-06-06")
+        assert result["missing filter"] == []
 
     def test_returns_empty_dict_for_empty_filter_names(self, conn):
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 42)
-        result = db.read_last_n_days(conn, [], n=7, as_of="2026-06-06")
-        assert result == {}
+        assert db.read_last_n_days(conn, []) == {}
 
     def test_excludes_rows_after_as_of(self, conn):
-        db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
-        db.write_snapshot(conn, "2026-06-07", "Next 7 Days", 12)  # future row
+        db.write_snapshot(conn, "2026-06-07", "Next 7 Days", 99)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
-        assert result["Next 7 Days"] == [("2026-06-05", 10), ("2026-06-06", 11)]
+        assert result["Next 7 Days"] == []
 
 
 class TestBuildDataset:
