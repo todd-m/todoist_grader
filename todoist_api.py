@@ -58,7 +58,7 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
     return results
 
 
-def build_last_completion_map(token: str, lookback_days: int = 90) -> dict[str, date]:
+def build_last_completion_map(token: str, lookback_days: int = 365) -> dict[str, date]:
     """Return {task_id: most_recent_completion_date} for recurring tasks only."""
     since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     events = fetch_item_activities(token, since, "completed")
