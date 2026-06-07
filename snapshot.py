@@ -1,4 +1,5 @@
 # snapshot.py
+import argparse
 import subprocess
 import sys
 import time
@@ -113,28 +114,92 @@ def compute_avg_age(
     return sum(ages) / len(ages) if ages else None
 
 
+def _render_graph(snap_cfg: dict, history: dict) -> None:
+    solo_filter_names = {n.lower() for n in snap_cfg.get("solo_filters", [])}
+
+    # Count series: extract (date, count) from SnapshotRows
+    main_count_rows = {
+        k: [(row.date, row.count) for row in v]
+        for k, v in history.items()
+        if k.lower() not in solo_filter_names
+    }
+    solo_count_rows = {
+        k: [(row.date, row.count) for row in v]
+        for k, v in history.items()
+        if k.lower() in solo_filter_names
+    }
+
+    # Age series: extract (date, avg_age_days) — None values become chart gaps
+    age_rows = {
+        k: [(row.date, row.avg_age_days) for row in v]
+        for k, v in history.items()
+    }
+    age_rows = {k: v for k, v in age_rows.items() if any(a is not None for _, a in v)}
+
+    charts: list[tuple[dict, str]] = []
+    if main_count_rows:
+        charts.append((graph.build_dataset(main_count_rows), ""))
+    for name, series in solo_count_rows.items():
+        charts.append((graph.build_dataset({name: series}), name))
+    if age_rows:
+        charts.append((graph.build_dataset(age_rows), "Avg Task Age (days)"))
+
+    graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
+    html = graph.render_page(charts, "Task Snapshots — Last 7 Days")
+    graph.write_graph(html, graph_path)
+    try:
+        subprocess.run(["open", graph_path])
+    except FileNotFoundError:
+        print(f"Graph written to {graph_path}")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--graph-only", action="store_true",
+                        help="Re-render graph from existing DB data without fetching new snapshots")
+    args, _ = parser.parse_known_args()
+
     cfg = load_config()
+
+    snap_cfg = cfg.get("snapshots")
+    if not snap_cfg:
+        sys.exit("config.toml must have a [snapshots] section")
+
+    if args.graph_only:
+        db_path: str = snap_cfg.get("db_path", "snapshots.db")
+        conn = db.init_db(db_path)
+        try:
+            filter_names = [
+                row[0] for row in conn.execute(
+                    "SELECT DISTINCT filter_name FROM snapshots ORDER BY filter_name"
+                ).fetchall()
+            ]
+            if not filter_names:
+                sys.exit("No snapshot data found. Run `make snapshot` first.")
+            history = db.read_last_n_days(conn, filter_names)
+        finally:
+            conn.close()
+        _render_graph(snap_cfg, history)
+        return
 
     try:
         token = cfg["todoist"]["api_token"]
     except KeyError:
         sys.exit("config.toml must have [todoist] api_token")
 
-    snap_cfg = cfg.get("snapshots")
-    if not snap_cfg:
-        sys.exit("config.toml must have a [snapshots] section")
-
     config_names: list[str] = snap_cfg.get("filters", [])
-    if not config_names:
+    solo_names: list[str] = snap_cfg.get("solo_filters", [])
+    seen = {n.lower() for n in config_names}
+    all_names = list(config_names) + [n for n in solo_names if n.lower() not in seen]
+    if not all_names:
         sys.exit("[snapshots] filters must not be empty")
 
-    db_path: str = snap_cfg.get("db_path", "snapshots.db")
+    db_path = snap_cfg.get("db_path", "snapshots.db")
 
     print("Fetching Todoist filters…")
     todoist_filters = fetch_todoist_filters(token)
 
-    resolved = resolve_filters(config_names, todoist_filters)
+    resolved = resolve_filters(all_names, todoist_filters)
     if not resolved:
         sys.exit("No configured filters matched any Todoist filter. Aborting.")
 
@@ -195,42 +260,7 @@ def main() -> None:
         table.add_row(display_name, str(n), delta_str, avg_str)
 
     console.print(table)
-    solo_filter_names = {n.lower() for n in snap_cfg.get("solo_filters", [])}
-
-    # Count series: extract (date, count) from SnapshotRows
-    main_count_rows = {
-        k: [(row.date, row.count) for row in v]
-        for k, v in history.items()
-        if k.lower() not in solo_filter_names
-    }
-    solo_count_rows = {
-        k: [(row.date, row.count) for row in v]
-        for k, v in history.items()
-        if k.lower() in solo_filter_names
-    }
-
-    # Age series: extract (date, avg_age_days) — None values become chart gaps
-    age_rows = {
-        k: [(row.date, row.avg_age_days) for row in v]
-        for k, v in history.items()
-    }
-    age_rows = {k: v for k, v in age_rows.items() if any(a is not None for _, a in v)}
-
-    charts: list[tuple[dict, str]] = []
-    if main_count_rows:
-        charts.append((graph.build_dataset(main_count_rows), ""))
-    for name, series in solo_count_rows.items():
-        charts.append((graph.build_dataset({name: series}), name))
-    if age_rows:
-        charts.append((graph.build_dataset(age_rows), "Avg Task Age (days)"))
-
-    graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
-    html = graph.render_page(charts, "Task Snapshots — Last 7 Days")
-    graph.write_graph(html, graph_path)
-    try:
-        subprocess.run(["open", graph_path])
-    except FileNotFoundError:
-        print(f"Graph written to {graph_path}")
+    _render_graph(snap_cfg, history)
 
 
 if __name__ == "__main__":

@@ -121,7 +121,7 @@ solo_filters = [                   # optional; each gets its own chart below the
 ]
 ```
 
-Filter names are matched case-insensitively against your saved Todoist filters. Any name with no match is warned and skipped.
+Filter names can be defined in `filters` and/or `solo_filters`. Any name with no match in Todoist is warned and skipped.
 
 After printing the table, `make snapshot` generates `snapshots_graph.html` — a Chart.js line chart showing the last 7 days of task counts (one series per filter) — and opens it in your browser. Filters listed in `solo_filters` render in a separate chart below the main one, useful when their scale differs significantly from the others. The page respects the system dark/light appearance preference.
 

@@ -1,6 +1,6 @@
 PYTHON = .venv/bin/python
 
-.PHONY: run dry-run summary today completed snapshot install test
+.PHONY: run dry-run summary today completed snapshot graph install test
 
 run:
 	$(PYTHON) grader.py
@@ -20,6 +20,9 @@ completed:
 
 snapshot:
 	$(PYTHON) snapshot.py
+
+graph:
+	$(PYTHON) snapshot.py --graph-only
 
 install:
 	python3 -m venv .venv

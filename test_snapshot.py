@@ -538,6 +538,38 @@ class TestMain:
         subtitles = [sub for _, sub in charts]
         assert "Next 7 Days" in subtitles
 
+    def test_solo_filter_not_in_filters_is_still_fetched(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {
+                "filters": ["next 7 days"],
+                "db_path": "irrelevant",
+                "solo_filters": ["next year"],   # not in filters
+            },
+        })
+        mocker.patch("snapshot.fetch_todoist_filters", return_value={
+            "next 7 days": ("Next 7 Days", "7 days"),
+            "next year":   ("Next Year",   "next year"),
+        })
+        mocker.patch(
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * {"7 days": 10, "next year": 100}.get(q, 0),
+        )
+        mocker.patch("snapshot.build_last_completion_map", return_value={})
+        import db as db_module
+        conn = db_module.init_db(":memory:")
+        mocker.patch("snapshot.db.init_db", return_value=conn)
+        mocker.patch("snapshot.graph.write_graph")
+        mocker.patch("snapshot.subprocess.run")
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        charts, _ = mock_render.call_args.args
+        assert len(charts) == 2
+        subtitles = [sub for _, sub in charts]
+        assert "" in subtitles           # main chart
+        assert "Next Year" in subtitles  # solo chart
+
 
 class TestReadLastNDays:
     def test_returns_last_7_days_and_excludes_older(self, conn):
