@@ -100,7 +100,7 @@ def compute_avg_age(
 ) -> float | None:
     ages = []
     for task in tasks:
-        created_str = task.get("created_at", "")
+        created_str = task.get("added_at", "")
         if not created_str:
             continue
         created_date = date.fromisoformat(created_str[:10])

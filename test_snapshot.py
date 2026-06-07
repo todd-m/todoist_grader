@@ -270,17 +270,17 @@ class TestFetchFilterTasks:
 class TestComputeAvgAge:
     TODAY = date(2026, 6, 7)
 
-    def _task(self, task_id, created_at, is_recurring=False):
+    def _task(self, task_id, added_at, is_recurring=False):
         return {
             "id": task_id,
-            "created_at": f"{created_at}T10:00:00Z",
+            "added_at": f"{added_at}T10:00:00Z",
             "due": {"is_recurring": is_recurring} if is_recurring else None,
         }
 
     def test_returns_none_for_empty_task_list(self):
         assert compute_avg_age([], {}, self.TODAY) is None
 
-    def test_non_recurring_uses_created_at(self):
+    def test_non_recurring_uses_added_at(self):
         tasks = [self._task("1", "2026-05-01", is_recurring=False)]
         result = compute_avg_age(tasks, {}, self.TODAY)
         assert result == pytest.approx(37.0)  # June 7 - May 1 = 37 days
@@ -291,7 +291,7 @@ class TestComputeAvgAge:
         result = compute_avg_age(tasks, completion_map, self.TODAY)
         assert result == pytest.approx(6.0)  # June 7 - June 1 = 6 days
 
-    def test_recurring_without_map_entry_falls_back_to_created_at(self):
+    def test_recurring_without_map_entry_falls_back_to_added_at(self):
         tasks = [self._task("1", "2026-05-01", is_recurring=True)]
         result = compute_avg_age(tasks, {}, self.TODAY)
         assert result == pytest.approx(37.0)
@@ -304,15 +304,15 @@ class TestComputeAvgAge:
         result = compute_avg_age(tasks, {}, self.TODAY)
         assert result == pytest.approx(8.0)
 
-    def test_skips_task_with_no_created_at(self):
+    def test_skips_task_with_no_added_at(self):
         tasks = [
-            {"id": "1", "due": None},  # no created_at
+            {"id": "1", "due": None},  # no added_at
             self._task("2", "2026-06-01"),
         ]
         result = compute_avg_age(tasks, {}, self.TODAY)
         assert result == pytest.approx(6.0)
 
-    def test_returns_none_when_all_tasks_lack_created_at(self):
+    def test_returns_none_when_all_tasks_lack_added_at(self):
         tasks = [{"id": "1", "due": None}]
         assert compute_avg_age(tasks, {}, self.TODAY) is None
 
