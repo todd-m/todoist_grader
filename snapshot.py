@@ -12,6 +12,7 @@ from rich.table import Table
 
 import db
 import graph
+from todoist_api import build_last_completion_map
 
 SYNC_URL   = "https://api.todoist.com/api/v1/sync"
 FILTER_URL = "https://api.todoist.com/api/v1/tasks/filter"
@@ -91,6 +92,27 @@ def fetch_filter_tasks(token: str, query: str, retries: int = 3, backoff: float 
     return tasks
 
 
+def compute_avg_age(
+    tasks: list[dict],
+    completion_map: dict[str, date],
+    today: date,
+) -> float | None:
+    ages = []
+    for task in tasks:
+        created_str = task.get("created_at", "")
+        if not created_str:
+            continue
+        created_date = date.fromisoformat(created_str[:10])
+        due = task.get("due") or {}
+        is_recurring = due.get("is_recurring", False)
+        if is_recurring and task.get("id") in completion_map:
+            ref_date = completion_map[task["id"]]
+        else:
+            ref_date = created_date
+        ages.append((today - ref_date).days)
+    return sum(ages) / len(ages) if ages else None
+
+
 def main() -> None:
     cfg = load_config()
 
@@ -116,19 +138,33 @@ def main() -> None:
     if not resolved:
         sys.exit("No configured filters matched any Todoist filter. Aborting.")
 
-    today = date.today().isoformat()
+    today_date = date.today()
+    today = today_date.isoformat()
 
     print("Counting tasks…")
+    all_tasks: dict[str, list[dict]] = {}
     counts: dict[str, int] = {}
     for _config_name, display_name, query in resolved:
         tasks = fetch_filter_tasks(token, query)
+        all_tasks[display_name] = tasks
         counts[display_name] = len(tasks)
         print(f"  {display_name}: {len(tasks)}")
+
+    try:
+        completion_map = build_last_completion_map(token, lookback_days=90)
+    except requests.HTTPError as exc:
+        print(f"Warning: could not fetch completion history ({exc}); using created_at for all tasks", file=sys.stderr)
+        completion_map = {}
+
+    avg_ages: dict[str, float | None] = {
+        display_name: compute_avg_age(all_tasks[display_name], completion_map, today_date)
+        for _, display_name, _ in resolved
+    }
 
     conn = db.init_db(db_path)
     try:
         for display_name, n in counts.items():
-            db.write_snapshot(conn, today, display_name, n)
+            db.write_snapshot(conn, today, display_name, n, avg_ages.get(display_name))
         prior = db.read_latest_before(conn, today)
         history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved])
     finally:
