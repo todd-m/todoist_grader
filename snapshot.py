@@ -57,9 +57,9 @@ def resolve_filters(
     return resolved
 
 
-def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float = 2.0) -> int:
+def fetch_filter_tasks(token: str, query: str, retries: int = 3, backoff: float = 2.0) -> list[dict]:
     headers = {"Authorization": f"Bearer {token}"}
-    count = 0
+    tasks: list[dict] = []
     cursor: str | None = None
 
     while True:
@@ -83,12 +83,12 @@ def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float 
 
         data = resp.json()
         results = data.get("results", [])
-        count += len(results)
+        tasks.extend(results)
         cursor = data.get("next_cursor")
         if not cursor:
             break
 
-    return count
+    return tasks
 
 
 def main() -> None:

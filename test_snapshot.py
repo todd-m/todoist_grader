@@ -8,7 +8,7 @@ import db
 import db as db_module
 import graph
 from db import SnapshotRow
-from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks, main
+from snapshot import fetch_todoist_filters, resolve_filters, fetch_filter_tasks, main
 
 
 # DB tests use a real in-memory SQLite connection — no mocking needed since sqlite3 has no I/O cost.
@@ -207,34 +207,36 @@ class TestResolveFilters:
         assert "bogus" in capsys.readouterr().err
 
 
-class TestCountFilterTasks:
+class TestFetchFilterTasks:
     @patch("snapshot.requests.get")
-    def test_counts_single_page(self, mock_get):
-        mock_get.return_value = _make_resp({"results": [{}] * 5})
-        assert count_filter_tasks("tok", "today") == 5
+    def test_returns_task_list_single_page(self, mock_get):
+        mock_get.return_value = _make_resp({"results": [{"id": "1"}, {"id": "2"}]})
+        result = fetch_filter_tasks("tok", "today")
+        assert result == [{"id": "1"}, {"id": "2"}]
 
     @patch("snapshot.requests.get")
-    def test_paginates_to_count_all(self, mock_get):
+    def test_paginates_and_returns_all(self, mock_get):
         mock_get.side_effect = [
-            _make_resp({"results": [{}] * 200, "next_cursor": "c1"}),
-            _make_resp({"results": [{}] * 10}),
+            _make_resp({"results": [{"id": str(i)} for i in range(200)], "next_cursor": "c1"}),
+            _make_resp({"results": [{"id": "200"}]}),
         ]
-        assert count_filter_tasks("tok", "today") == 210
+        result = fetch_filter_tasks("tok", "today")
+        assert len(result) == 201
         second_params = mock_get.call_args_list[1].kwargs["params"]
         assert second_params["cursor"] == "c1"
 
     @patch("snapshot.requests.get")
-    def test_partial_page_with_cursor_continues_paginating(self, mock_get):
+    def test_partial_page_with_cursor_continues(self, mock_get):
         mock_get.side_effect = [
             _make_resp({"results": [{}] * 50, "next_cursor": "c1"}),
             _make_resp({"results": [{}] * 30}),
         ]
-        assert count_filter_tasks("tok", "today") == 80
+        assert len(fetch_filter_tasks("tok", "today")) == 80
 
     @patch("snapshot.requests.get")
     def test_sends_query_and_auth(self, mock_get):
         mock_get.return_value = _make_resp({"results": []})
-        count_filter_tasks("tok", "next 7 days & !subtask")
+        fetch_filter_tasks("tok", "next 7 days & !subtask")
         kwargs = mock_get.call_args.kwargs
         assert kwargs["params"]["query"] == "next 7 days & !subtask"
         assert kwargs["headers"]["Authorization"] == "Bearer tok"
@@ -243,23 +245,24 @@ class TestCountFilterTasks:
     def test_raises_immediately_on_4xx(self, mock_get):
         mock_get.return_value = _make_resp({}, status_code=401)
         with pytest.raises(requests.HTTPError):
-            count_filter_tasks("tok", "today")
+            fetch_filter_tasks("tok", "today")
 
     @patch("snapshot.requests.get")
     def test_retries_on_5xx_then_succeeds(self, mock_get):
         mock_get.side_effect = [
             _make_resp({}, status_code=503),
-            _make_resp({"results": [{}] * 3}),
+            _make_resp({"results": [{"id": "1"}, {"id": "2"}, {"id": "3"}]}),
         ]
-        assert count_filter_tasks("tok", "today", retries=3, backoff=0.0) == 3
+        result = fetch_filter_tasks("tok", "today", retries=3, backoff=0.0)
+        assert len(result) == 3
         assert mock_get.call_count == 2
 
     @patch("snapshot.requests.get")
     def test_raises_after_max_retries(self, mock_get):
         mock_get.return_value = _make_resp({}, status_code=503)
         with pytest.raises(requests.HTTPError):
-            count_filter_tasks("tok", "today", retries=2, backoff=0.0)
-        assert mock_get.call_count == 3  # 1 initial + 2 retries
+            fetch_filter_tasks("tok", "today", retries=2, backoff=0.0)
+        assert mock_get.call_count == 3
 
 
 class TestMain:
