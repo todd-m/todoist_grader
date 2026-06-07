@@ -50,7 +50,7 @@ from rich.console import Console
 from rich.table import Table
 from todoist_api_python.api import TodoistAPI
 
-from todoist_api import ACTIVITIES_URL, fetch_item_activities
+from todoist_api import fetch_item_activities
 
 COMPLETED_URL  = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
 
