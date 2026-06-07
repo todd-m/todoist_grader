@@ -320,6 +320,8 @@ class TestComputeAvgAge:
 class TestMain:
     def _patched_conn(self, mocker, counts: dict[str, int], prior_rows=None):
         """
+        Returns an in-memory SQLite connection, pre-populated with prior_rows if given,
+        and patches snapshot.db.init_db to return it.
         counts: {query_string: count} — number of fake tasks returned by fetch_filter_tasks.
         prior_rows: [(created_on, filter_name, task_count), ...]
         """
@@ -399,6 +401,16 @@ class TestMain:
         assert "42" in out
         assert "0" in out       # delta column shows "0", not em dash or blank
         assert "+0" not in out  # zero delta must not be formatted as "+0"
+
+    def test_completion_map_http_error_falls_back_gracefully(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 3})
+        mocker.patch(
+            "snapshot.build_last_completion_map",
+            side_effect=requests.HTTPError("503"),
+        )
+        self._patch_date(mocker, "2026-06-05")
+        main()  # must not raise
+        assert "Warning" in capsys.readouterr().err
 
     def test_exits_when_snapshots_section_missing(self, mocker):
         mocker.patch("snapshot.load_config", return_value={
