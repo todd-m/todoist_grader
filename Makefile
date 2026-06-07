@@ -29,4 +29,4 @@ install:
 	$(PYTHON) -m pip install todoist-api-python requests rich pytest pytest-mock
 
 test:
-	$(PYTHON) -m pytest test_grader.py -v
+	$(PYTHON) -m pytest test_grader.py test_snapshot.py test_todoist_api.py -v

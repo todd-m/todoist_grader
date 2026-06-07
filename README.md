@@ -117,7 +117,7 @@ filters = [
 ]
 
 solo_filters = [                   # optional; each gets its own chart below the main one
-  "next year",
+  "view all",
 ]
 ```
 

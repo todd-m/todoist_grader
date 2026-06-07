@@ -7,7 +7,10 @@ import requests
 import db
 import db as db_module
 import graph
-from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks, main
+from db import SnapshotRow
+from datetime import date
+
+from snapshot import fetch_todoist_filters, resolve_filters, fetch_filter_tasks, compute_avg_age, main
 
 
 # DB tests use a real in-memory SQLite connection — no mocking needed since sqlite3 has no I/O cost.
@@ -31,24 +34,66 @@ class TestInitDb:
         ).fetchall()
         assert ("idx_snapshots_filter",) in indexes
 
+    def test_creates_avg_age_days_column(self, conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
+        assert "avg_age_days" in cols
+
+    def test_migration_adds_column_to_existing_db(self, tmp_path):
+        import sqlite3
+        db_file = str(tmp_path / "old.db")
+        old_conn = sqlite3.connect(db_file)
+        old_conn.execute("""
+            CREATE TABLE snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_on TEXT NOT NULL,
+                filter_name TEXT NOT NULL,
+                task_count INTEGER NOT NULL,
+                UNIQUE (created_on, filter_name)
+            )
+        """)
+        old_conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_filter ON snapshots (filter_name, created_on)")
+        old_conn.commit()
+        old_conn.close()
+        conn2 = db.init_db(db_file)
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(snapshots)")}
+        conn2.close()
+        assert "avg_age_days" in cols
+
+    def test_migration_idempotent_when_column_already_exists(self, tmp_path):
+        db_file = str(tmp_path / "migrated.db")
+        conn1 = db.init_db(db_file)
+        conn1.close()
+        conn2 = db.init_db(db_file)
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(snapshots)")}
+        conn2.close()
+        assert "avg_age_days" in cols
+
 
 class TestWriteSnapshot:
     def test_inserts_row(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 42)
         row = conn.execute(
-            "SELECT created_on, filter_name, task_count FROM snapshots"
+            "SELECT created_on, filter_name, task_count, avg_age_days FROM snapshots"
         ).fetchone()
-        assert row == ("2026-06-01", "next 7 days", 42)
+        assert row == ("2026-06-01", "next 7 days", 42, None)
+
+    def test_inserts_row_with_avg_age(self, conn):
+        db.write_snapshot(conn, "2026-06-01", "next 7 days", 42, avg_age_days=18.5)
+        row = conn.execute(
+            "SELECT avg_age_days FROM snapshots"
+        ).fetchone()
+        assert row[0] == pytest.approx(18.5)
 
     def test_idempotent_overwrite(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 42)
-        db.write_snapshot(conn, "2026-06-01", "next 7 days", 55)
+        db.write_snapshot(conn, "2026-06-01", "next 7 days", 55, avg_age_days=10.0)
         rows = conn.execute(
-            "SELECT task_count FROM snapshots "
+            "SELECT task_count, avg_age_days FROM snapshots "
             "WHERE created_on='2026-06-01' AND filter_name='next 7 days'"
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] == 55
+        assert rows[0][1] == pytest.approx(10.0)
 
     def test_different_filters_same_day_stored_separately(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 10)
@@ -164,34 +209,36 @@ class TestResolveFilters:
         assert "bogus" in capsys.readouterr().err
 
 
-class TestCountFilterTasks:
+class TestFetchFilterTasks:
     @patch("snapshot.requests.get")
-    def test_counts_single_page(self, mock_get):
-        mock_get.return_value = _make_resp({"results": [{}] * 5})
-        assert count_filter_tasks("tok", "today") == 5
+    def test_returns_task_list_single_page(self, mock_get):
+        mock_get.return_value = _make_resp({"results": [{"id": "1"}, {"id": "2"}]})
+        result = fetch_filter_tasks("tok", "today")
+        assert result == [{"id": "1"}, {"id": "2"}]
 
     @patch("snapshot.requests.get")
-    def test_paginates_to_count_all(self, mock_get):
+    def test_paginates_and_returns_all(self, mock_get):
         mock_get.side_effect = [
-            _make_resp({"results": [{}] * 200, "next_cursor": "c1"}),
-            _make_resp({"results": [{}] * 10}),
+            _make_resp({"results": [{"id": str(i)} for i in range(200)], "next_cursor": "c1"}),
+            _make_resp({"results": [{"id": "200"}]}),
         ]
-        assert count_filter_tasks("tok", "today") == 210
+        result = fetch_filter_tasks("tok", "today")
+        assert len(result) == 201
         second_params = mock_get.call_args_list[1].kwargs["params"]
         assert second_params["cursor"] == "c1"
 
     @patch("snapshot.requests.get")
-    def test_partial_page_with_cursor_continues_paginating(self, mock_get):
+    def test_partial_page_with_cursor_continues(self, mock_get):
         mock_get.side_effect = [
             _make_resp({"results": [{}] * 50, "next_cursor": "c1"}),
             _make_resp({"results": [{}] * 30}),
         ]
-        assert count_filter_tasks("tok", "today") == 80
+        assert len(fetch_filter_tasks("tok", "today")) == 80
 
     @patch("snapshot.requests.get")
     def test_sends_query_and_auth(self, mock_get):
         mock_get.return_value = _make_resp({"results": []})
-        count_filter_tasks("tok", "next 7 days & !subtask")
+        fetch_filter_tasks("tok", "next 7 days & !subtask")
         kwargs = mock_get.call_args.kwargs
         assert kwargs["params"]["query"] == "next 7 days & !subtask"
         assert kwargs["headers"]["Authorization"] == "Bearer tok"
@@ -200,23 +247,74 @@ class TestCountFilterTasks:
     def test_raises_immediately_on_4xx(self, mock_get):
         mock_get.return_value = _make_resp({}, status_code=401)
         with pytest.raises(requests.HTTPError):
-            count_filter_tasks("tok", "today")
+            fetch_filter_tasks("tok", "today")
 
     @patch("snapshot.requests.get")
     def test_retries_on_5xx_then_succeeds(self, mock_get):
         mock_get.side_effect = [
             _make_resp({}, status_code=503),
-            _make_resp({"results": [{}] * 3}),
+            _make_resp({"results": [{"id": "1"}, {"id": "2"}, {"id": "3"}]}),
         ]
-        assert count_filter_tasks("tok", "today", retries=3, backoff=0.0) == 3
+        result = fetch_filter_tasks("tok", "today", retries=3, backoff=0.0)
+        assert len(result) == 3
         assert mock_get.call_count == 2
 
     @patch("snapshot.requests.get")
     def test_raises_after_max_retries(self, mock_get):
         mock_get.return_value = _make_resp({}, status_code=503)
         with pytest.raises(requests.HTTPError):
-            count_filter_tasks("tok", "today", retries=2, backoff=0.0)
-        assert mock_get.call_count == 3  # 1 initial + 2 retries
+            fetch_filter_tasks("tok", "today", retries=2, backoff=0.0)
+        assert mock_get.call_count == 3
+
+
+class TestComputeAvgAge:
+    TODAY = date(2026, 6, 7)
+
+    def _task(self, task_id, created_at, is_recurring=False):
+        return {
+            "id": task_id,
+            "created_at": f"{created_at}T10:00:00Z",
+            "due": {"is_recurring": is_recurring} if is_recurring else None,
+        }
+
+    def test_returns_none_for_empty_task_list(self):
+        assert compute_avg_age([], {}, self.TODAY) is None
+
+    def test_non_recurring_uses_created_at(self):
+        tasks = [self._task("1", "2026-05-01", is_recurring=False)]
+        result = compute_avg_age(tasks, {}, self.TODAY)
+        assert result == pytest.approx(37.0)  # June 7 - May 1 = 37 days
+
+    def test_recurring_with_map_entry_uses_last_completion(self):
+        tasks = [self._task("1", "2026-01-01", is_recurring=True)]
+        completion_map = {"1": date(2026, 6, 1)}
+        result = compute_avg_age(tasks, completion_map, self.TODAY)
+        assert result == pytest.approx(6.0)  # June 7 - June 1 = 6 days
+
+    def test_recurring_without_map_entry_falls_back_to_created_at(self):
+        tasks = [self._task("1", "2026-05-01", is_recurring=True)]
+        result = compute_avg_age(tasks, {}, self.TODAY)
+        assert result == pytest.approx(37.0)
+
+    def test_averages_across_multiple_tasks(self):
+        tasks = [
+            self._task("1", "2026-06-01"),  # 6 days old
+            self._task("2", "2026-05-28"),  # 10 days old
+        ]
+        result = compute_avg_age(tasks, {}, self.TODAY)
+        assert result == pytest.approx(8.0)
+
+    def test_skips_task_with_no_created_at(self):
+        tasks = [
+            {"id": "1", "due": None},  # no created_at
+            self._task("2", "2026-06-01"),
+        ]
+        result = compute_avg_age(tasks, {}, self.TODAY)
+        assert result == pytest.approx(6.0)
+
+    def test_returns_none_when_all_tasks_lack_created_at(self):
+        tasks = [{"id": "1", "due": None}]
+        assert compute_avg_age(tasks, {}, self.TODAY) is None
 
 
 class TestMain:
@@ -224,7 +322,7 @@ class TestMain:
         """
         Returns an in-memory SQLite connection, pre-populated with prior_rows if given,
         and patches snapshot.db.init_db to return it.
-        counts: {query_string: count} — used to stub count_filter_tasks.
+        counts: {query_string: count} — number of fake tasks returned by fetch_filter_tasks.
         prior_rows: [(created_on, filter_name, task_count), ...]
         """
         conn = db_module.init_db(":memory:")
@@ -240,17 +338,21 @@ class TestMain:
             "next 7 days": ("Next 7 Days", "7 days"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: counts.get(q, 0),
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * counts.get(q, 0),
         )
+        mocker.patch("snapshot.build_last_completion_map", return_value={})
         mocker.patch("snapshot.db.init_db", return_value=conn)
         mocker.patch("snapshot.graph.write_graph")
         mocker.patch("snapshot.subprocess.run")
         return conn
 
     def _patch_date(self, mocker, iso: str):
+        from datetime import date as real_date
         mock_date = MagicMock()
-        mock_date.today.return_value.isoformat.return_value = iso
+        real_today = real_date.fromisoformat(iso)
+        mock_date.today.return_value = real_today
+        mock_date.fromisoformat.side_effect = real_date.fromisoformat
         mocker.patch("snapshot.date", mock_date)
 
     def test_prints_filter_name_and_count(self, mocker, capsys):
@@ -299,6 +401,16 @@ class TestMain:
         assert "42" in out
         assert "0" in out       # delta column shows "0", not em dash or blank
         assert "+0" not in out  # zero delta must not be formatted as "+0"
+
+    def test_completion_map_http_error_falls_back_gracefully(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 3})
+        mocker.patch(
+            "snapshot.build_last_completion_map",
+            side_effect=requests.exceptions.ConnectionError("timeout"),
+        )
+        self._patch_date(mocker, "2026-06-05")
+        main()  # must not raise
+        assert "Warning" in capsys.readouterr().err
 
     def test_exits_when_snapshots_section_missing(self, mocker):
         mocker.patch("snapshot.load_config", return_value={
@@ -363,11 +475,12 @@ class TestMain:
             "next 30 days": ("Next 30 Days", "30 days"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: {"7 days": 10, "30 days": 100}.get(q, 0),
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * {"7 days": 10, "30 days": 100}.get(q, 0),
         )
         import db as db_module
         conn = db_module.init_db(":memory:")
+        mocker.patch("snapshot.build_last_completion_map", return_value={})
         mocker.patch("snapshot.db.init_db", return_value=conn)
         mocker.patch("snapshot.graph.write_graph")
         mocker.patch("snapshot.subprocess.run")
@@ -379,6 +492,22 @@ class TestMain:
         subtitles = [sub for _, sub in charts]
         assert "" in subtitles
         assert "Next 30 Days" in subtitles
+
+    def test_avg_age_column_header_shown(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 5})
+        self._patch_date(mocker, "2026-06-07")
+        main()
+        assert "Avg Age" in capsys.readouterr().out
+
+    def test_age_chart_group_added_to_render_page(self, mocker):
+        self._patched_conn(mocker, counts={"7 days": 5})
+        mocker.patch("snapshot.compute_avg_age", return_value=10.0)
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-07")
+        main()
+        charts, _ = mock_render.call_args.args
+        subtitles = [sub for _, sub in charts]
+        assert "Avg Task Age (days)" in subtitles
 
     def test_solo_filter_matching_is_case_insensitive(self, mocker):
         mocker.patch("snapshot.load_config", return_value={
@@ -393,11 +522,12 @@ class TestMain:
             "next 7 days": ("Next 7 Days", "7 days"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: 42,
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * 42,
         )
         import db as db_module
         conn = db_module.init_db(":memory:")
+        mocker.patch("snapshot.build_last_completion_map", return_value={})
         mocker.patch("snapshot.db.init_db", return_value=conn)
         mocker.patch("snapshot.graph.write_graph")
         mocker.patch("snapshot.subprocess.run")
@@ -422,9 +552,10 @@ class TestMain:
             "next year":   ("Next Year",   "next year"),
         })
         mocker.patch(
-            "snapshot.count_filter_tasks",
-            side_effect=lambda tok, q, **kw: {"7 days": 10, "next year": 100}.get(q, 0),
+            "snapshot.fetch_filter_tasks",
+            side_effect=lambda tok, q, **kw: [{}] * {"7 days": 10, "next year": 100}.get(q, 0),
         )
+        mocker.patch("snapshot.build_last_completion_map", return_value={})
         import db as db_module
         conn = db_module.init_db(":memory:")
         mocker.patch("snapshot.db.init_db", return_value=conn)
@@ -451,47 +582,52 @@ class TestReadLastNDays:
             db.write_snapshot(conn, d, "Next 7 Days", count)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
         assert len(result["Next 7 Days"]) == 7
-        assert result["Next 7 Days"][0] == ("2026-05-31", 13)
-        assert result["Next 7 Days"][-1] == ("2026-06-06", 19)
+        first = result["Next 7 Days"][0]
+        assert first.date == "2026-05-31"
+        assert first.count == 13
+        assert first.avg_age_days is None
+        last = result["Next 7 Days"][-1]
+        assert last.date == "2026-06-06"
+        assert last.count == 19
 
     def test_missing_days_produce_gap_not_zero(self, conn):
         db.write_snapshot(conn, "2026-06-04", "Next 7 Days", 10)
         db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 12)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
-        assert result["Next 7 Days"] == [("2026-06-04", 10), ("2026-06-06", 12)]
+        rows = result["Next 7 Days"]
+        assert rows[0] == SnapshotRow("2026-06-04", 10, None)
+        assert rows[1] == SnapshotRow("2026-06-06", 12, None)
+
+    def test_avg_age_days_returned_when_present(self, conn):
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 42, avg_age_days=18.5)
+        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
+        assert result["Next 7 Days"][0].avg_age_days == pytest.approx(18.5)
 
     def test_multiple_filters_returned_separately(self, conn):
         db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
         db.write_snapshot(conn, "2026-06-05", "Next 30 Days", 20)
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
-        db.write_snapshot(conn, "2026-06-06", "Next 30 Days", 21)
-        result = db.read_last_n_days(
-            conn, ["Next 7 Days", "Next 30 Days"], n=7, as_of="2026-06-06"
-        )
-        assert result["Next 7 Days"]  == [("2026-06-05", 10), ("2026-06-06", 11)]
-        assert result["Next 30 Days"] == [("2026-06-05", 20), ("2026-06-06", 21)]
+        result = db.read_last_n_days(conn, ["Next 7 Days", "Next 30 Days"], as_of="2026-06-05")
+        assert result["Next 7 Days"][0].count == 10
+        assert result["Next 30 Days"][0].count == 20
 
     def test_n_equals_1_returns_only_as_of_date(self, conn):
         db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
+        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 20)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=1, as_of="2026-06-06")
-        assert result["Next 7 Days"] == [("2026-06-06", 11)]
+        assert len(result["Next 7 Days"]) == 1
+        assert result["Next 7 Days"][0].count == 20
 
     def test_returns_empty_list_for_filter_with_no_data(self, conn):
-        result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
-        assert result == {"Next 7 Days": []}
+        result = db.read_last_n_days(conn, ["missing filter"], as_of="2026-06-06")
+        assert result["missing filter"] == []
 
     def test_returns_empty_dict_for_empty_filter_names(self, conn):
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 42)
-        result = db.read_last_n_days(conn, [], n=7, as_of="2026-06-06")
-        assert result == {}
+        assert db.read_last_n_days(conn, []) == {}
 
     def test_excludes_rows_after_as_of(self, conn):
-        db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
-        db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 11)
-        db.write_snapshot(conn, "2026-06-07", "Next 7 Days", 12)  # future row
+        db.write_snapshot(conn, "2026-06-07", "Next 7 Days", 99)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
-        assert result["Next 7 Days"] == [("2026-06-05", 10), ("2026-06-06", 11)]
+        assert result["Next 7 Days"] == []
 
 
 class TestBuildDataset:

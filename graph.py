@@ -11,11 +11,11 @@ COLORS = [
 ]
 
 
-def build_dataset(rows: dict[str, list[tuple[str, int]]]) -> dict:
-    all_dates = sorted({d for series in rows.values() for d, _ in series})
+def build_dataset(rows: dict[str, list]) -> dict:
+    all_dates = sorted({row[0] for series in rows.values() for row in series})
     datasets = []
     for i, (filter_name, series) in enumerate(rows.items()):
-        by_date = {d: c for d, c in series}
+        by_date = {row[0]: row[1] for row in series}
         color = COLORS[i % len(COLORS)]
         datasets.append({
             "label": filter_name,

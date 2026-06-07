@@ -50,7 +50,8 @@ from rich.console import Console
 from rich.table import Table
 from todoist_api_python.api import TodoistAPI
 
-ACTIVITIES_URL = "https://api.todoist.com/api/v1/activities"
+from todoist_api import fetch_item_activities
+
 COMPLETED_URL  = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
 
 # The three label names this script manages
@@ -138,65 +139,6 @@ def _all_pages(paginator, retries: int = 3, backoff: float = 2.0) -> list:
             wait = backoff ** attempt
             print(f"Todoist API error ({exc}); retrying in {wait:.0f}s… (attempt {attempt}/{retries})")
             time.sleep(wait)
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Activity log (REST API v1) — sole source of recurring task history
-# ---------------------------------------------------------------------------
-
-def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[dict]:
-    """
-    Return all item-level activity events of *event_type* since *since*.
-
-    Uses GET /api/v1/activities with object_type=item — the only endpoint
-    that records recurring task completions and due-date changes.
-
-    Relevant fields per event:
-      object_id        — task ID (matches the active recurring task's ID)
-      event_date       — ISO-8601 UTC timestamp
-      event_type       — "completed" or "updated"
-      extra_data       — dict with:
-          is_recurring     (completed events) True when the task recurs
-          last_due_date    (updated events)   previous due date before change
-
-    Note: the API's 'since' query param is ignored server-side; events are
-    returned newest-first, so we stop paginating as soon as we see an event
-    older than *since* and filter client-side.
-    """
-    since_date = since.strftime("%Y-%m-%d")   # YYYY-MM-DD for cheap string compare
-    results: list[dict] = []
-    cursor: str | None = None
-
-    while True:
-        params: dict = {
-            "object_type": "item",
-            "event_type":  event_type,
-            "limit":       100,
-        }
-        if cursor:
-            params["cursor"] = cursor
-
-        resp = requests.get(
-            ACTIVITIES_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        chunk: list[dict] = data.get("results", [])
-
-        # Events arrive newest-first.  Stop as soon as any event predates since.
-        in_window = [e for e in chunk if (e.get("event_date") or "")[:10] >= since_date]
-        results.extend(in_window)
-        if len(in_window) < len(chunk):
-            break           # hit the date boundary — no need to page further
-
-        cursor = data.get("next_cursor")
-        if not cursor or len(chunk) < 100:
-            break
-
     return results
 
 

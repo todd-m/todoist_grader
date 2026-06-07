@@ -13,6 +13,7 @@ from rich.table import Table
 
 import db
 import graph
+from todoist_api import build_last_completion_map
 
 SYNC_URL   = "https://api.todoist.com/api/v1/sync"
 FILTER_URL = "https://api.todoist.com/api/v1/tasks/filter"
@@ -58,9 +59,9 @@ def resolve_filters(
     return resolved
 
 
-def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float = 2.0) -> int:
+def fetch_filter_tasks(token: str, query: str, retries: int = 3, backoff: float = 2.0) -> list[dict]:
     headers = {"Authorization": f"Bearer {token}"}
-    count = 0
+    tasks: list[dict] = []
     cursor: str | None = None
 
     while True:
@@ -84,24 +85,64 @@ def count_filter_tasks(token: str, query: str, retries: int = 3, backoff: float 
 
         data = resp.json()
         results = data.get("results", [])
-        count += len(results)
+        tasks.extend(results)
         cursor = data.get("next_cursor")
         if not cursor:
             break
 
-    return count
+    return tasks
+
+
+def compute_avg_age(
+    tasks: list[dict],
+    completion_map: dict[str, date],
+    today: date,
+) -> float | None:
+    ages = []
+    for task in tasks:
+        created_str = task.get("created_at", "")
+        if not created_str:
+            continue
+        created_date = date.fromisoformat(created_str[:10])
+        due = task.get("due") or {}
+        is_recurring = due.get("is_recurring", False)
+        if is_recurring and task.get("id") in completion_map:
+            ref_date = completion_map[task["id"]]
+        else:
+            ref_date = created_date
+        ages.append((today - ref_date).days)
+    return sum(ages) / len(ages) if ages else None
 
 
 def _render_graph(snap_cfg: dict, history: dict) -> None:
     solo_filter_names = {n.lower() for n in snap_cfg.get("solo_filters", [])}
-    main_rows = {k: v for k, v in history.items() if k.lower() not in solo_filter_names}
-    solo_rows  = {k: v for k, v in history.items() if k.lower() in solo_filter_names}
+
+    # Count series: extract (date, count) from SnapshotRows
+    main_count_rows = {
+        k: [(row.date, row.count) for row in v]
+        for k, v in history.items()
+        if k.lower() not in solo_filter_names
+    }
+    solo_count_rows = {
+        k: [(row.date, row.count) for row in v]
+        for k, v in history.items()
+        if k.lower() in solo_filter_names
+    }
+
+    # Age series: extract (date, avg_age_days) — None values become chart gaps
+    age_rows = {
+        k: [(row.date, row.avg_age_days) for row in v]
+        for k, v in history.items()
+    }
+    age_rows = {k: v for k, v in age_rows.items() if any(a is not None for _, a in v)}
 
     charts: list[tuple[dict, str]] = []
-    if main_rows:
-        charts.append((graph.build_dataset(main_rows), ""))
-    for name, series in solo_rows.items():
+    if main_count_rows:
+        charts.append((graph.build_dataset(main_count_rows), ""))
+    for name, series in solo_count_rows.items():
         charts.append((graph.build_dataset({name: series}), name))
+    if age_rows:
+        charts.append((graph.build_dataset(age_rows), "Avg Task Age (days)"))
 
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
     html = graph.render_page(charts, "Task Snapshots — Last 7 Days")
@@ -162,21 +203,35 @@ def main() -> None:
     if not resolved:
         sys.exit("No configured filters matched any Todoist filter. Aborting.")
 
-    today = date.today().isoformat()
+    today_date = date.today()
+    today = today_date.isoformat()
 
     print("Counting tasks…")
+    all_tasks: dict[str, list[dict]] = {}
     counts: dict[str, int] = {}
     for _config_name, display_name, query in resolved:
-        n = count_filter_tasks(token, query)
-        counts[display_name] = n
-        print(f"  {display_name}: {n}")
+        tasks = fetch_filter_tasks(token, query)
+        all_tasks[display_name] = tasks
+        counts[display_name] = len(tasks)
+        print(f"  {display_name}: {len(tasks)}")
+
+    try:
+        completion_map = build_last_completion_map(token, lookback_days=90)
+    except requests.exceptions.RequestException as exc:
+        print(f"Warning: could not fetch completion history ({exc}); using created_at for all tasks", file=sys.stderr)
+        completion_map = {}
+
+    avg_ages: dict[str, float | None] = {
+        display_name: compute_avg_age(all_tasks[display_name], completion_map, today_date)
+        for _, display_name, _ in resolved
+    }
 
     conn = db.init_db(db_path)
     try:
         for display_name, n in counts.items():
-            db.write_snapshot(conn, today, display_name, n)
+            db.write_snapshot(conn, today, display_name, n, avg_ages.get(display_name))
         prior = db.read_latest_before(conn, today)
-        history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved])
+        history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved], as_of=today)
     finally:
         conn.close()
 
@@ -190,6 +245,7 @@ def main() -> None:
     table.add_column("Filter",  style="cyan")
     table.add_column("Count",   justify="right")
     table.add_column("Δ prior", justify="right")
+    table.add_column("Avg Age", justify="right")
 
     for _config_name, display_name, _query in resolved:
         n = counts[display_name]
@@ -199,7 +255,9 @@ def main() -> None:
         else:
             delta = n - prior_n
             delta_str = f"+{delta}" if delta > 0 else str(delta)
-        table.add_row(display_name, str(n), delta_str)
+        avg = avg_ages.get(display_name)
+        avg_str = f"{avg:.0f}d" if avg is not None else "—"
+        table.add_row(display_name, str(n), delta_str, avg_str)
 
     console.print(table)
     _render_graph(snap_cfg, history)
