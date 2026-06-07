@@ -7,6 +7,7 @@ import requests
 import db
 import db as db_module
 import graph
+from db import SnapshotRow
 from snapshot import fetch_todoist_filters, resolve_filters, count_filter_tasks, main
 
 
@@ -61,7 +62,9 @@ class TestInitDb:
         conn1 = db.init_db(db_file)
         conn1.close()
         conn2 = db.init_db(db_file)
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(snapshots)")}
         conn2.close()
+        assert "avg_age_days" in cols
 
 
 class TestWriteSnapshot:
@@ -451,7 +454,6 @@ class TestMain:
 
 class TestReadLastNDays:
     def test_returns_last_7_days_and_excludes_older(self, conn):
-        from db import SnapshotRow
         for d, count in [
             ("2026-05-28", 10), ("2026-05-29", 11), ("2026-05-30", 12),
             ("2026-05-31", 13), ("2026-06-01", 14), ("2026-06-02", 15),
@@ -470,7 +472,6 @@ class TestReadLastNDays:
         assert last.count == 19
 
     def test_missing_days_produce_gap_not_zero(self, conn):
-        from db import SnapshotRow
         db.write_snapshot(conn, "2026-06-04", "Next 7 Days", 10)
         db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 12)
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
