@@ -152,7 +152,7 @@ def main() -> None:
 
     try:
         completion_map = build_last_completion_map(token, lookback_days=90)
-    except requests.HTTPError as exc:
+    except requests.exceptions.RequestException as exc:
         print(f"Warning: could not fetch completion history ({exc}); using created_at for all tasks", file=sys.stderr)
         completion_map = {}
 
@@ -166,7 +166,7 @@ def main() -> None:
         for display_name, n in counts.items():
             db.write_snapshot(conn, today, display_name, n, avg_ages.get(display_name))
         prior = db.read_latest_before(conn, today)
-        history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved])
+        history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved], as_of=today)
     finally:
         conn.close()
 

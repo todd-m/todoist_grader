@@ -406,7 +406,7 @@ class TestMain:
         self._patched_conn(mocker, counts={"7 days": 3})
         mocker.patch(
             "snapshot.build_last_completion_map",
-            side_effect=requests.HTTPError("503"),
+            side_effect=requests.exceptions.ConnectionError("timeout"),
         )
         self._patch_date(mocker, "2026-06-05")
         main()  # must not raise
