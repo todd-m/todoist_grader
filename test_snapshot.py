@@ -493,6 +493,22 @@ class TestMain:
         assert "" in subtitles
         assert "Next 30 Days" in subtitles
 
+    def test_avg_age_column_header_shown(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 5})
+        self._patch_date(mocker, "2026-06-07")
+        main()
+        assert "Avg Age" in capsys.readouterr().out
+
+    def test_age_chart_group_added_to_render_page(self, mocker):
+        self._patched_conn(mocker, counts={"7 days": 5})
+        mocker.patch("snapshot.compute_avg_age", return_value=10.0)
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-07")
+        main()
+        charts, _ = mock_render.call_args.args
+        subtitles = [sub for _, sub in charts]
+        assert "Avg Task Age (days)" in subtitles
+
     def test_solo_filter_matching_is_case_insensitive(self, mocker):
         mocker.patch("snapshot.load_config", return_value={
             "todoist": {"api_token": "tok"},

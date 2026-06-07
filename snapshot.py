@@ -180,6 +180,7 @@ def main() -> None:
     table.add_column("Filter",  style="cyan")
     table.add_column("Count",   justify="right")
     table.add_column("Δ prior", justify="right")
+    table.add_column("Avg Age", justify="right")
 
     for _config_name, display_name, _query in resolved:
         n = counts[display_name]
@@ -189,18 +190,39 @@ def main() -> None:
         else:
             delta = n - prior_n
             delta_str = f"+{delta}" if delta > 0 else str(delta)
-        table.add_row(display_name, str(n), delta_str)
+        avg = avg_ages.get(display_name)
+        avg_str = f"{avg:.0f}d" if avg is not None else "—"
+        table.add_row(display_name, str(n), delta_str, avg_str)
 
     console.print(table)
     solo_filter_names = {n.lower() for n in snap_cfg.get("solo_filters", [])}
-    main_rows = {k: v for k, v in history.items() if k.lower() not in solo_filter_names}
-    solo_rows  = {k: v for k, v in history.items() if k.lower() in solo_filter_names}
+
+    # Count series: extract (date, count) from SnapshotRows
+    main_count_rows = {
+        k: [(row.date, row.count) for row in v]
+        for k, v in history.items()
+        if k.lower() not in solo_filter_names
+    }
+    solo_count_rows = {
+        k: [(row.date, row.count) for row in v]
+        for k, v in history.items()
+        if k.lower() in solo_filter_names
+    }
+
+    # Age series: extract (date, avg_age_days) — None values become chart gaps
+    age_rows = {
+        k: [(row.date, row.avg_age_days) for row in v]
+        for k, v in history.items()
+    }
+    age_rows = {k: v for k, v in age_rows.items() if any(a is not None for _, a in v)}
 
     charts: list[tuple[dict, str]] = []
-    if main_rows:
-        charts.append((graph.build_dataset(main_rows), ""))
-    for name, series in solo_rows.items():
+    if main_count_rows:
+        charts.append((graph.build_dataset(main_count_rows), ""))
+    for name, series in solo_count_rows.items():
         charts.append((graph.build_dataset({name: series}), name))
+    if age_rows:
+        charts.append((graph.build_dataset(age_rows), "Avg Task Age (days)"))
 
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
     html = graph.render_page(charts, "Task Snapshots — Last 7 Days")

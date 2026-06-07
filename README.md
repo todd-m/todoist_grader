@@ -73,7 +73,7 @@ python grader.py --config ~/my-config.toml
 | `--summary` | Print a rich table of all recurring tasks with their rates and grades |
 | `--today` | Filter report to tasks due today |
 | `--completed` | Print a completion report for a project (requires `--project`) |
-| `--project NAME` | Project name for `--completed` |
+| `--project NAME` | Project name for `--completed`; via Make: `make completed PROJECT="Name"` |
 | `--config PATH` | Path to config file (default: `config.toml`) |
 
 ---
@@ -115,11 +115,15 @@ filters = [
   "next 7 days",
   "next 30 days",
 ]
+
+solo_filters = [                   # optional; each gets its own chart below the main one
+  "view all",
+]
 ```
 
 Filter names are matched case-insensitively against your saved Todoist filters. Any name with no match is warned and skipped.
 
-After printing the table, `make snapshot` also generates `snapshots_graph.html` — a Chart.js line chart showing the last 7 days of task counts (one series per filter) — and opens it in your browser. The page respects the system dark/light appearance preference.
+After printing the table, `make snapshot` generates `snapshots_graph.html` — a Chart.js line chart showing the last 7 days of task counts (one series per filter) — and opens it in your browser. Filters listed in `solo_filters` render in a separate chart below the main one, useful when their scale differs significantly from the others. The page respects the system dark/light appearance preference.
 
 ---
 
