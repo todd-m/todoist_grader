@@ -216,7 +216,7 @@ def main() -> None:
         print(f"  {display_name}: {len(tasks)}")
 
     try:
-        completion_map = build_last_completion_map(token, lookback_days=90)
+        completion_map = build_last_completion_map(token, lookback_days=365)
     except requests.exceptions.RequestException as exc:
         print(f"Warning: could not fetch completion history ({exc}); using created_at for all tasks", file=sys.stderr)
         completion_map = {}
