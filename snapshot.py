@@ -104,7 +104,10 @@ def main() -> None:
         sys.exit("config.toml must have a [snapshots] section")
 
     config_names: list[str] = snap_cfg.get("filters", [])
-    if not config_names:
+    solo_names: list[str] = snap_cfg.get("solo_filters", [])
+    seen = {n.lower() for n in config_names}
+    all_names = list(config_names) + [n for n in solo_names if n.lower() not in seen]
+    if not all_names:
         sys.exit("[snapshots] filters must not be empty")
 
     db_path: str = snap_cfg.get("db_path", "snapshots.db")
@@ -112,7 +115,7 @@ def main() -> None:
     print("Fetching Todoist filters…")
     todoist_filters = fetch_todoist_filters(token)
 
-    resolved = resolve_filters(config_names, todoist_filters)
+    resolved = resolve_filters(all_names, todoist_filters)
     if not resolved:
         sys.exit("No configured filters matched any Todoist filter. Aborting.")
 
