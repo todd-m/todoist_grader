@@ -106,8 +106,8 @@ def compute_avg_age(
         created_date = date.fromisoformat(created_str[:10])
         due = task.get("due") or {}
         is_recurring = due.get("is_recurring", False)
-        if is_recurring and task.get("id") in completion_map:
-            ref_date = completion_map[task["id"]]
+        if is_recurring and str(task.get("id", "")) in completion_map:
+            ref_date = completion_map[str(task["id"])]
         else:
             ref_date = created_date
         ages.append((today - ref_date).days)

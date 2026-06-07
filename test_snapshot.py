@@ -291,6 +291,13 @@ class TestComputeAvgAge:
         result = compute_avg_age(tasks, completion_map, self.TODAY)
         assert result == pytest.approx(6.0)  # June 7 - June 1 = 6 days
 
+    def test_recurring_with_integer_id_matches_string_map_key(self):
+        # Filter endpoint returns integer IDs; completion_map keys are str — must match
+        tasks = [self._task(12345, "2026-01-01", is_recurring=True)]
+        completion_map = {"12345": date(2026, 6, 1)}
+        result = compute_avg_age(tasks, completion_map, self.TODAY)
+        assert result == pytest.approx(6.0)
+
     def test_recurring_without_map_entry_falls_back_to_added_at(self):
         tasks = [self._task("1", "2026-05-01", is_recurring=True)]
         result = compute_avg_age(tasks, {}, self.TODAY)
