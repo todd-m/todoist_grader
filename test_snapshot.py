@@ -409,15 +409,44 @@ class TestMain:
         assert "0" in out       # delta column shows "0", not em dash or blank
         assert "+0" not in out  # zero delta must not be formatted as "+0"
 
-    def test_completion_map_http_error_falls_back_gracefully(self, mocker, capsys):
+    def test_completion_map_5xx_stores_none_avg_ages(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 3})
+        write_spy = mocker.patch("snapshot.db.write_snapshot")
+        resp = MagicMock()
+        resp.status_code = 503
+        mocker.patch(
+            "snapshot.build_last_completion_map",
+            side_effect=requests.HTTPError(response=resp),
+        )
+        self._patch_date(mocker, "2026-06-05")
+        main()  # must not raise
+        err = capsys.readouterr().err
+        assert "Warning" in err
+        assert "503" in err
+        _, kwargs = write_spy.call_args
+        assert kwargs.get("avg_age_days") is None
+
+    def test_completion_map_connection_error_raises(self, mocker):
         self._patched_conn(mocker, counts={"7 days": 3})
         mocker.patch(
             "snapshot.build_last_completion_map",
             side_effect=requests.exceptions.ConnectionError("timeout"),
         )
         self._patch_date(mocker, "2026-06-05")
-        main()  # must not raise
-        assert "Warning" in capsys.readouterr().err
+        with pytest.raises(requests.exceptions.ConnectionError):
+            main()
+
+    def test_completion_map_4xx_raises(self, mocker):
+        self._patched_conn(mocker, counts={"7 days": 3})
+        resp = MagicMock()
+        resp.status_code = 401
+        mocker.patch(
+            "snapshot.build_last_completion_map",
+            side_effect=requests.HTTPError(response=resp),
+        )
+        self._patch_date(mocker, "2026-06-05")
+        with pytest.raises(requests.HTTPError):
+            main()
 
     def test_exits_when_snapshots_section_missing(self, mocker):
         mocker.patch("snapshot.load_config", return_value={
