@@ -129,20 +129,30 @@ def _render_graph(snap_cfg: dict, history: dict) -> None:
         if k.lower() in solo_filter_names
     }
 
-    # Age series: extract (date, avg_age_days) — None values become chart gaps
-    age_rows = {
+    # Age series split by solo_filters, mirroring the count chart pattern
+    main_age_rows = {
         k: [(row.date, row.avg_age_days) for row in v]
         for k, v in history.items()
+        if k.lower() not in solo_filter_names
     }
-    age_rows = {k: v for k, v in age_rows.items() if any(a is not None for _, a in v)}
+    main_age_rows = {k: v for k, v in main_age_rows.items() if any(a is not None for _, a in v)}
+
+    solo_age_rows = {
+        k: [(row.date, row.avg_age_days) for row in v]
+        for k, v in history.items()
+        if k.lower() in solo_filter_names
+    }
+    solo_age_rows = {k: v for k, v in solo_age_rows.items() if any(a is not None for _, a in v)}
 
     charts: list[tuple[dict, str]] = []
     if main_count_rows:
         charts.append((graph.build_dataset(main_count_rows), ""))
     for name, series in solo_count_rows.items():
         charts.append((graph.build_dataset({name: series}), name))
-    if age_rows:
-        charts.append((graph.build_dataset(age_rows), "Avg Task Age (days)"))
+    if main_age_rows:
+        charts.append((graph.build_dataset(main_age_rows), "Avg Task Age (days)"))
+    for name, series in solo_age_rows.items():
+        charts.append((graph.build_dataset({name: series}), f"{name} — Avg Task Age (days)"))
 
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
     html = graph.render_page(charts, "Task Snapshots — Last 7 Days")
