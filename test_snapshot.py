@@ -516,6 +516,35 @@ class TestMain:
         subtitles = [sub for _, sub in charts]
         assert "Avg Task Age (days)" in subtitles
 
+    def test_solo_filter_gets_separate_age_chart(self, mocker):
+        mocker.patch("snapshot.load_config", return_value={
+            "todoist": {"api_token": "tok"},
+            "snapshots": {
+                "filters": ["next 7 days"],
+                "solo_filters": ["next 30 days"],
+                "db_path": "irrelevant",
+            },
+        })
+        mocker.patch("snapshot.fetch_todoist_filters", return_value={
+            "next 7 days":  ("Next 7 Days",  "7 days"),
+            "next 30 days": ("Next 30 Days", "30 days"),
+        })
+        mocker.patch("snapshot.fetch_filter_tasks", side_effect=lambda tok, q, **kw: [{}] * 5)
+        mocker.patch("snapshot.build_last_completion_map", return_value={})
+        mocker.patch("snapshot.compute_avg_age", return_value=10.0)
+        import db as db_module
+        conn = db_module.init_db(":memory:")
+        mocker.patch("snapshot.db.init_db", return_value=conn)
+        mocker.patch("snapshot.graph.write_graph")
+        mocker.patch("snapshot.subprocess.run")
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        self._patch_date(mocker, "2026-06-07")
+        main()
+        charts, _ = mock_render.call_args.args
+        subtitles = [sub for _, sub in charts]
+        assert "Avg Task Age (days)" in subtitles               # main age chart
+        assert "Next 30 Days — Avg Task Age (days)" in subtitles  # solo age chart
+
     def test_solo_filter_matching_is_case_insensitive(self, mocker):
         mocker.patch("snapshot.load_config", return_value={
             "todoist": {"api_token": "tok"},
