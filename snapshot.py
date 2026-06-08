@@ -227,14 +227,15 @@ def main() -> None:
 
     try:
         completion_map = build_last_completion_map(token, lookback_days=365)
-    except requests.exceptions.RequestException as exc:
-        print(f"Warning: could not fetch completion history ({exc}); using created_at for all tasks", file=sys.stderr)
-        completion_map = {}
-
-    avg_ages: dict[str, float | None] = {
-        display_name: compute_avg_age(all_tasks[display_name], completion_map, today_date)
-        for _, display_name, _ in resolved
-    }
+        avg_ages: dict[str, float | None] = {
+            display_name: compute_avg_age(all_tasks[display_name], completion_map, today_date)
+            for _, display_name, _ in resolved
+        }
+    except requests.HTTPError as exc:
+        if exc.response is None or exc.response.status_code < 500:
+            raise
+        print(f"Warning: activities endpoint returned {exc.response.status_code} — avg age skipped for this run", file=sys.stderr)
+        avg_ages = {display_name: None for _, display_name, _ in resolved}
 
     conn = db.init_db(db_path)
     try:
