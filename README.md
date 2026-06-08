@@ -91,16 +91,18 @@ Fetching Todoist filters…
 Counting tasks…
   Next 7 Days: 42
   Next 30 Days: 118
-                Task Snapshots — 2026-06-06
-┌──────────────┬───────┬─────────┐
-│ Filter       │ Count │ Δ prior │
-├──────────────┼───────┼─────────┤
-│ Next 7 Days  │    42 │      +3 │
-│ Next 30 Days │   118 │      -1 │
-└──────────────┴───────┴─────────┘
+                  Task Snapshots — 2026-06-06
+┌──────────────┬───────┬─────────┬─────────┐
+│ Filter       │ Count │ Δ prior │ Avg Age │
+├──────────────┼───────┼─────────┼─────────┤
+│ Next 7 Days  │    42 │      +3 │     14d │
+│ Next 30 Days │   118 │      -1 │     21d │
+└──────────────┴───────┴─────────┴─────────┘
 ```
 
 The Δ column shows `—` on the first run and `0` / `+N` / `-N` thereafter. Re-running on the same day overwrites today's row (idempotent).
+
+**Avg Age** is the average age of tasks in each filter. For non-recurring tasks this is days since the task was created. For recurring tasks it is days since the task was last completed (using a 365-day lookback window), so it reflects how stale your recurring work feels rather than how old the task definition is.
 
 ### Config
 
@@ -123,7 +125,18 @@ solo_filters = [                   # optional; each gets its own chart below the
 
 Filter names can be defined in `filters` and/or `solo_filters`. Any name with no match in Todoist is warned and skipped.
 
-After printing the table, `make snapshot` generates `snapshots_graph.html` — a Chart.js line chart showing the last 7 days of task counts (one series per filter) — and opens it in your browser. Filters listed in `solo_filters` render in a separate chart below the main one, useful when their scale differs significantly from the others. The page respects the system dark/light appearance preference.
+After printing the table, `make snapshot` generates `snapshots_graph.html` and opens it in your browser. The page contains:
+
+- **Count charts** — last 7 days of task counts, one series per filter. Filters in `solo_filters` get their own chart below the main one.
+- **Age charts** — last 7 days of average task age, following the same layout. Solo filters get a separate age chart as well.
+
+The page respects the system dark/light appearance preference.
+
+To re-render the graph from existing data without fetching new snapshots:
+
+```bash
+make graph
+```
 
 ---
 
