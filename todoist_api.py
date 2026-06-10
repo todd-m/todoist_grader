@@ -1,7 +1,38 @@
+import sys
+import time
+
 import requests
 from datetime import date, datetime, timedelta, timezone
 
 ACTIVITIES_URL = "https://api.todoist.com/api/v1/activities"
+
+
+def get_with_retry(
+    url: str,
+    *,
+    headers: dict,
+    params: dict,
+    timeout: int,
+    retries: int = 3,
+    backoff: float = 2.0,
+    label: str,
+) -> requests.Response:
+    attempt = 0
+    while True:
+        resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+        try:
+            resp.raise_for_status()
+            return resp
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code < 500:
+                raise
+            attempt += 1
+            if attempt > retries:
+                print(f"[{label}] HTTP {resp.status_code} on attempt {attempt}/{retries} — giving up", file=sys.stderr)
+                raise
+            delay = backoff ** attempt
+            print(f"[{label}] HTTP {resp.status_code} on attempt {attempt}/{retries} — retrying in {delay:.0f}s", file=sys.stderr)
+            time.sleep(delay)
 
 
 def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[dict]:
@@ -36,13 +67,13 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
         if cursor:
             params["cursor"] = cursor
 
-        resp = requests.get(
+        resp = get_with_retry(
             ACTIVITIES_URL,
             headers={"Authorization": f"Bearer {token}"},
             params=params,
             timeout=30,
+            label="fetch_item_activities",
         )
-        resp.raise_for_status()
         data = resp.json()
         chunk: list[dict] = data.get("results", [])
 
