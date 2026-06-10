@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 import pytest
 
-from todoist_api import build_last_completion_map, fetch_item_activities
+from todoist_api import build_last_completion_map, fetch_item_activities, get_with_retry
 
 
 def _event(object_id, event_date, is_recurring=True):
@@ -77,6 +77,71 @@ def _make_resp(json_data, status_code=200):
     else:
         resp.raise_for_status.return_value = None
     return resp
+
+
+class TestGetWithRetry:
+    URL = "https://example.com/api"
+    HEADERS = {"Authorization": "Bearer tok"}
+    PARAMS = {"key": "val"}
+
+    def _call(self, **kwargs):
+        defaults = dict(headers=self.HEADERS, params=self.PARAMS, timeout=10, label="test")
+        defaults.update(kwargs)
+        return get_with_retry(self.URL, **defaults)
+
+    @std_patch("todoist_api.requests.get")
+    def test_returns_response_on_success(self, mock_get):
+        mock_get.return_value = _make_resp({})
+        resp = self._call()
+        assert resp.status_code == 200
+        assert mock_get.call_count == 1
+
+    @std_patch("todoist_api.requests.get")
+    def test_passes_url_headers_params_timeout(self, mock_get):
+        mock_get.return_value = _make_resp({})
+        self._call(timeout=42)
+        assert mock_get.call_args.args[0] == self.URL
+        kw = mock_get.call_args.kwargs
+        assert kw["headers"] == self.HEADERS
+        assert kw["params"] == self.PARAMS
+        assert kw["timeout"] == 42
+
+    @std_patch("todoist_api.time.sleep")
+    @std_patch("todoist_api.requests.get")
+    def test_retries_on_5xx_then_succeeds(self, mock_get, mock_sleep):
+        mock_get.side_effect = [_make_resp({}, 503), _make_resp({})]
+        resp = self._call()
+        assert mock_get.call_count == 2
+        assert resp.status_code == 200
+
+    @std_patch("todoist_api.time.sleep")
+    @std_patch("todoist_api.requests.get")
+    def test_exhausts_retries_and_raises(self, mock_get, mock_sleep):
+        import requests as _req
+        mock_get.return_value = _make_resp({}, 503)
+        with pytest.raises(_req.HTTPError):
+            self._call(retries=3)
+        assert mock_get.call_count == 4  # 1 initial + 3 retries
+
+    @std_patch("todoist_api.time.sleep")
+    @std_patch("todoist_api.requests.get")
+    def test_4xx_raises_immediately_without_retry(self, mock_get, mock_sleep):
+        import requests as _req
+        mock_get.return_value = _make_resp({}, 401)
+        with pytest.raises(_req.HTTPError):
+            self._call()
+        assert mock_get.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @std_patch("todoist_api.time.sleep")
+    @std_patch("todoist_api.requests.get")
+    def test_sleep_uses_exponential_backoff(self, mock_get, mock_sleep):
+        import requests as _req
+        mock_get.return_value = _make_resp({}, 503)
+        with pytest.raises(_req.HTTPError):
+            self._call(retries=3, backoff=2.0)
+        sleep_calls = [c.args[0] for c in mock_sleep.call_args_list]
+        assert sleep_calls == [2.0, 4.0, 8.0]
 
 
 class TestFetchItemActivities:

@@ -2,7 +2,6 @@
 import argparse
 import subprocess
 import sys
-import time
 import tomllib
 from datetime import date
 from pathlib import Path
@@ -13,7 +12,7 @@ from rich.table import Table
 
 import db
 import graph
-from todoist_api import build_last_completion_map
+from todoist_api import build_last_completion_map, get_with_retry
 
 SYNC_URL   = "https://api.todoist.com/api/v1/sync"
 FILTER_URL = "https://api.todoist.com/api/v1/tasks/filter"
@@ -69,19 +68,15 @@ def fetch_filter_tasks(token: str, query: str, retries: int = 3, backoff: float 
         if cursor:
             params["cursor"] = cursor
 
-        attempt = 0
-        while True:
-            resp = requests.get(FILTER_URL, headers=headers, params=params, timeout=15)
-            try:
-                resp.raise_for_status()
-                break
-            except requests.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code < 500:
-                    raise
-                attempt += 1
-                if attempt > retries:
-                    raise
-                time.sleep(backoff ** attempt)
+        resp = get_with_retry(
+            FILTER_URL,
+            headers=headers,
+            params=params,
+            timeout=15,
+            retries=retries,
+            backoff=backoff,
+            label="fetch_filter_tasks",
+        )
 
         data = resp.json()
         results = data.get("results", [])
