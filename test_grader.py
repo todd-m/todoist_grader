@@ -5,8 +5,7 @@ Run with:  pytest test_grader.py -v
 """
 
 import tomllib
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -28,10 +27,10 @@ from grader import (
     resolve_project_id,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
 
 def make_label(name: str) -> SimpleNamespace:
     return SimpleNamespace(name=name, id=f"id_{name}")
@@ -53,12 +52,11 @@ def make_response(json_data: dict, status_code: int = 200) -> MagicMock:
 # load_config
 # ---------------------------------------------------------------------------
 
+
 class TestLoadConfig:
     def test_loads_valid_toml(self, tmp_path):
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(
-            '[todoist]\napi_token = "tok123"\n[grading]\ndays = 14\n'
-        )
+        cfg_file.write_text('[todoist]\napi_token = "tok123"\n[grading]\ndays = 14\n')
         cfg = load_config(str(cfg_file))
         assert cfg["todoist"]["api_token"] == "tok123"
         assert cfg["grading"]["days"] == 14
@@ -69,9 +67,7 @@ class TestLoadConfig:
 
     def test_loads_thresholds(self, tmp_path):
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(
-            '[todoist]\napi_token = "x"\n[grading.thresholds]\nA = 0.9\nB = 0.7\n'
-        )
+        cfg_file.write_text('[todoist]\napi_token = "x"\n[grading.thresholds]\nA = 0.9\nB = 0.7\n')
         cfg = load_config(str(cfg_file))
         assert cfg["grading"]["thresholds"]["A"] == pytest.approx(0.9)
         assert cfg["grading"]["thresholds"]["B"] == pytest.approx(0.7)
@@ -87,12 +83,29 @@ class TestLoadConfig:
 # completion_dates_for  (activity events: object_id, event_date, extra_data.is_recurring)
 # ---------------------------------------------------------------------------
 
+
 class TestCompletionDatesFor:
     EVENTS = [
-        {"object_id": "1", "event_date": "2024-03-01T09:00:00Z", "extra_data": {"is_recurring": True}},
-        {"object_id": "1", "event_date": "2024-03-05T18:30:00Z", "extra_data": {"is_recurring": True}},
-        {"object_id": "2", "event_date": "2024-03-01T10:00:00Z", "extra_data": {"is_recurring": True}},
-        {"object_id": "1", "event_date": "2024-03-05T20:00:00Z", "extra_data": {"is_recurring": True}},  # same day → deduped
+        {
+            "object_id": "1",
+            "event_date": "2024-03-01T09:00:00Z",
+            "extra_data": {"is_recurring": True},
+        },
+        {
+            "object_id": "1",
+            "event_date": "2024-03-05T18:30:00Z",
+            "extra_data": {"is_recurring": True},
+        },
+        {
+            "object_id": "2",
+            "event_date": "2024-03-01T10:00:00Z",
+            "extra_data": {"is_recurring": True},
+        },
+        {
+            "object_id": "1",
+            "event_date": "2024-03-05T20:00:00Z",
+            "extra_data": {"is_recurring": True},
+        },  # same day → deduped
     ]
 
     def test_returns_dates_for_matching_task(self):
@@ -110,8 +123,13 @@ class TestCompletionDatesFor:
         assert completion_dates_for("1", []) == set()
 
     def test_skips_non_recurring_events(self):
-        events = [{"object_id": "1", "event_date": "2024-04-10T08:00:00Z",
-                   "extra_data": {"is_recurring": False}}]
+        events = [
+            {
+                "object_id": "1",
+                "event_date": "2024-04-10T08:00:00Z",
+                "extra_data": {"is_recurring": False},
+            }
+        ]
         assert completion_dates_for("1", events) == set()
 
     def test_skips_events_with_no_is_recurring(self):
@@ -123,8 +141,13 @@ class TestCompletionDatesFor:
         assert completion_dates_for("1", events) == set()
 
     def test_object_id_coerced_to_string(self):
-        events = [{"object_id": 42, "event_date": "2024-05-01T00:00:00Z",
-                   "extra_data": {"is_recurring": True}}]
+        events = [
+            {
+                "object_id": 42,
+                "event_date": "2024-05-01T00:00:00Z",
+                "extra_data": {"is_recurring": True},
+            }
+        ]
         assert completion_dates_for("42", events) == {"2024-05-01"}
 
     def test_handles_missing_extra_data(self):
@@ -139,6 +162,7 @@ class TestCompletionDatesFor:
 # ---------------------------------------------------------------------------
 # count_snoozes
 # ---------------------------------------------------------------------------
+
 
 class TestCountSnoozes:
     def _event(self, object_id, event_date, has_due_date_change=True):
@@ -200,6 +224,7 @@ class TestCountSnoozes:
 # assign_grade
 # ---------------------------------------------------------------------------
 
+
 class TestAssignGrade:
     THRESHOLDS = {"A": 0.85, "B": 0.65}
 
@@ -224,7 +249,7 @@ class TestAssignGrade:
     def test_uses_defaults_when_thresholds_missing(self):
         assert assign_grade(0.85, {}) == "A"
         assert assign_grade(0.65, {}) == "B"
-        assert assign_grade(0.0,  {}) == "C"
+        assert assign_grade(0.0, {}) == "C"
 
     def test_custom_thresholds(self):
         t = {"A": 0.95, "B": 0.80}
@@ -236,17 +261,20 @@ class TestAssignGrade:
         # config values might be float or string depending on toml parsing
         assert assign_grade(0.85, {"A": "0.85", "B": "0.65"}) == "A"
 
-    @pytest.mark.parametrize("rate,expected", [
-        (1.00, "A"),
-        (0.90, "A"),
-        (0.85, "A"),
-        (0.84, "B"),
-        (0.70, "B"),
-        (0.65, "B"),
-        (0.64, "C"),
-        (0.50, "C"),
-        (0.00, "C"),
-    ])
+    @pytest.mark.parametrize(
+        "rate,expected",
+        [
+            (1.00, "A"),
+            (0.90, "A"),
+            (0.85, "A"),
+            (0.84, "B"),
+            (0.70, "B"),
+            (0.65, "B"),
+            (0.64, "C"),
+            (0.50, "C"),
+            (0.00, "C"),
+        ],
+    )
     def test_parametrized_boundary_values(self, rate, expected):
         assert assign_grade(rate, self.THRESHOLDS) == expected
 
@@ -254,6 +282,7 @@ class TestAssignGrade:
 # ---------------------------------------------------------------------------
 # ensure_grade_labels
 # ---------------------------------------------------------------------------
+
 
 class TestEnsureGradeLabels:
     def _make_api(self, existing_names):
@@ -308,6 +337,7 @@ class TestEnsureGradeLabels:
 # --today filter logic  (applied in main() to both report_results / nr_snoozed)
 # ---------------------------------------------------------------------------
 
+
 class TestTodayFilter:
     """
     The --today filter is applied in main() after nonrecurring_snooze_report
@@ -328,8 +358,7 @@ class TestTodayFilter:
 
     def _apply_filter(self, rows, today_str):
         # Mirror the exact predicate used in grader.py main()
-        return [r for r in rows
-                if r["task"].due and str(r["task"].due.date)[:10] == today_str]
+        return [r for r in rows if r["task"].due and str(r["task"].due.date)[:10] == today_str]
 
     def test_keeps_tasks_due_today_date_only(self):
         # Plain date string "YYYY-MM-DD"
@@ -363,14 +392,14 @@ class TestTodayFilter:
     def test_mixed_due_dates(self):
         today = datetime.now().strftime("%Y-%m-%d")
         dt_obj = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
-        rows = [self._row(today), self._row(dt_obj),
-                self._row("2020-01-01"), self._row(None)]
+        rows = [self._row(today), self._row(dt_obj), self._row("2020-01-01"), self._row(None)]
         assert len(self._apply_filter(rows, today)) == 2
 
 
 # ---------------------------------------------------------------------------
 # nonrecurring_snooze_report
 # ---------------------------------------------------------------------------
+
 
 class TestNonrecurringSnoozReport:
     def _task(self, id, is_recurring=False):
@@ -416,9 +445,9 @@ class TestNonrecurringSnoozReport:
     def test_sorted_by_snooze_count_ascending(self):
         tasks = [self._task("1"), self._task("2"), self._task("3")]
         events = (
-            [self._update_event("2")] * 3 +
-            [self._update_event("1")] * 5 +
-            [self._update_event("3")] * 1
+            [self._update_event("2")] * 3
+            + [self._update_event("1")] * 5
+            + [self._update_event("3")] * 1
         )
         rows = nonrecurring_snooze_report(tasks, events)
         counts = [r["snoozes"] for r in rows]
@@ -435,8 +464,13 @@ class TestNonrecurringSnoozReport:
 
     def test_object_id_coerced_to_string(self):
         tasks = [self._task("1")]
-        events = [{"object_id": 1, "event_date": "2024-03-01T00:00:00Z",
-                   "extra_data": {"last_due_date": "2024-02-28"}}]
+        events = [
+            {
+                "object_id": 1,
+                "event_date": "2024-03-01T00:00:00Z",
+                "extra_data": {"last_due_date": "2024-02-28"},
+            }
+        ]
         rows = nonrecurring_snooze_report(tasks, events)
         assert len(rows) == 1
 
@@ -449,6 +483,7 @@ class TestNonrecurringSnoozReport:
 # ---------------------------------------------------------------------------
 # Integration: grading pipeline (completion_dates_for + count_snoozes + assign_grade)
 # ---------------------------------------------------------------------------
+
 
 class TestGradingPipeline:
     """End-to-end tests through the pure computation layer."""
@@ -470,11 +505,11 @@ class TestGradingPipeline:
     def _run(self, task_id, completed_events, snooze_events, thresholds=None):
         thresholds = thresholds or {"A": 0.85, "B": 0.65}
         comp_dates = completion_dates_for(task_id, completed_events)
-        snoozes    = count_snoozes(task_id, snooze_events, comp_dates)
-        comps      = len(comp_dates)
-        total      = comps + snoozes
-        rate       = comps / total if total else 0.0
-        grade      = assign_grade(rate, thresholds)
+        snoozes = count_snoozes(task_id, snooze_events, comp_dates)
+        comps = len(comp_dates)
+        total = comps + snoozes
+        rate = comps / total if total else 0.0
+        grade = assign_grade(rate, thresholds)
         return {"comps": comps, "snoozes": snoozes, "rate": rate, "grade": grade}
 
     def test_perfect_record_gets_A(self):
@@ -490,7 +525,7 @@ class TestGradingPipeline:
 
     def test_snoozes_lower_the_grade(self):
         # 6 completions, 4 snoozes → 60% → C
-        comp_events   = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 7)]
+        comp_events = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 7)]
         snooze_events = [self._snooze_event("1", f"2024-03-{d:02d}") for d in range(10, 14)]
         result = self._run("1", comp_events, snooze_events)
         assert result["comps"] == 6
@@ -500,7 +535,7 @@ class TestGradingPipeline:
 
     def test_snooze_on_completion_day_not_counted(self):
         # Completed on day 1, snooze event also on day 1 → snooze not counted
-        comp_events   = [self._comp_event("1", "2024-03-01")]
+        comp_events = [self._comp_event("1", "2024-03-01")]
         snooze_events = [self._snooze_event("1", "2024-03-01")]
         result = self._run("1", comp_events, snooze_events)
         assert result["snoozes"] == 0
@@ -509,7 +544,7 @@ class TestGradingPipeline:
 
     def test_grade_b_boundary(self):
         # 13 completions, 7 snoozes → 65% → exactly B threshold
-        comp_events   = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 14)]
+        comp_events = [self._comp_event("1", f"2024-03-{d:02d}") for d in range(1, 14)]
         snooze_events = [self._snooze_event("1", f"2024-03-{d:02d}") for d in range(20, 27)]
         result = self._run("1", comp_events, snooze_events)
         assert result["rate"] == pytest.approx(0.65)
@@ -519,6 +554,7 @@ class TestGradingPipeline:
 # ---------------------------------------------------------------------------
 # Confirmation prompt (interactive y/N in main())
 # ---------------------------------------------------------------------------
+
 
 class TestConfirmationPrompt:
     """Tests for the [y/N] prompt shown before applying label writes in main()."""
@@ -534,18 +570,21 @@ class TestConfirmationPrompt:
             [SimpleNamespace(name=n) for n in ("grade:A", "grade:B", "grade:C")]
         ]
         mock_api.get_tasks.return_value = [tasks]
-        mocker.patch("grader.load_config", return_value={
-            "todoist": {"api_token": "fake"},
-            "grading": {"days": 7},
-            "rate_limit": {"write_delay_seconds": 0},
-        })
+        mocker.patch(
+            "grader.load_config",
+            return_value={
+                "todoist": {"api_token": "fake"},
+                "grading": {"days": 7},
+                "rate_limit": {"write_delay_seconds": 0},
+            },
+        )
         mocker.patch("grader.TodoistAPI", return_value=mock_api)
         mocker.patch("grader.fetch_item_activities", return_value=[])
         mocker.patch("sys.argv", argv or ["grader.py"])
         return mock_api
 
     def test_confirmed_applies_updates(self, mocker):
-        task = self._make_recurring_task(labels=[])   # no grade label → needs grade:C
+        task = self._make_recurring_task(labels=[])  # no grade label → needs grade:C
         mock_api = self._patch_deps(mocker, [task])
         mocker.patch("builtins.input", return_value="y")
 
@@ -599,15 +638,17 @@ class TestConfirmationPrompt:
 # --completed passes midnight-truncated since to fetch_completed_tasks
 # ---------------------------------------------------------------------------
 
+
 class TestCompletedSinceMidnight:
     def test_since_is_truncated_to_midnight(self, mocker):
         mock_api = MagicMock()
-        mock_api.get_projects.return_value = [
-            [SimpleNamespace(name="Work", id="proj_1")]
-        ]
-        mocker.patch("grader.load_config", return_value={
-            "todoist": {"api_token": "fake"},
-        })
+        mock_api.get_projects.return_value = [[SimpleNamespace(name="Work", id="proj_1")]]
+        mocker.patch(
+            "grader.load_config",
+            return_value={
+                "todoist": {"api_token": "fake"},
+            },
+        )
         mocker.patch("grader.TodoistAPI", return_value=mock_api)
         mock_fetch = mocker.patch("grader.fetch_completed_tasks", return_value=[])
         mocker.patch("grader.print_completed_report")
@@ -625,6 +666,7 @@ class TestCompletedSinceMidnight:
 # ---------------------------------------------------------------------------
 # resolve_project_id
 # ---------------------------------------------------------------------------
+
 
 class TestResolveProjectId:
     def _make_api(self, project_names):
@@ -651,16 +693,36 @@ class TestResolveProjectId:
 # fetch_completed_tasks
 # ---------------------------------------------------------------------------
 
+
 class TestFetchCompletedTasks:
-    SINCE = datetime(2024, 2, 27, tzinfo=timezone.utc)
+    SINCE = datetime(2024, 2, 27, tzinfo=UTC)
 
     @patch("grader.requests.get")
     def test_returns_items_matching_project(self, mock_get):
-        mock_get.return_value = make_response({"items": [
-            {"id": "1", "content": "Task A", "project_id": "proj_1", "completed_at": "2024-03-01T09:00:00Z"},
-            {"id": "2", "content": "Task B", "project_id": "proj_2", "completed_at": "2024-03-02T09:00:00Z"},
-            {"id": "3", "content": "Task C", "project_id": "proj_1", "completed_at": "2024-03-03T09:00:00Z"},
-        ]})
+        mock_get.return_value = make_response(
+            {
+                "items": [
+                    {
+                        "id": "1",
+                        "content": "Task A",
+                        "project_id": "proj_1",
+                        "completed_at": "2024-03-01T09:00:00Z",
+                    },
+                    {
+                        "id": "2",
+                        "content": "Task B",
+                        "project_id": "proj_2",
+                        "completed_at": "2024-03-02T09:00:00Z",
+                    },
+                    {
+                        "id": "3",
+                        "content": "Task C",
+                        "project_id": "proj_1",
+                        "completed_at": "2024-03-03T09:00:00Z",
+                    },
+                ]
+            }
+        )
         result = fetch_completed_tasks("tok", self.SINCE, "proj_1")
         assert len(result) == 2
         assert all(t["project_id"] == "proj_1" for t in result)
@@ -678,10 +740,12 @@ class TestFetchCompletedTasks:
 
     @patch("grader.requests.get")
     def test_paginates_via_next_cursor(self, mock_get):
-        page1 = make_response({
-            "items": [{"id": str(i), "project_id": "p1"} for i in range(200)],
-            "next_cursor": "cursor_abc",
-        })
+        page1 = make_response(
+            {
+                "items": [{"id": str(i), "project_id": "p1"} for i in range(200)],
+                "next_cursor": "cursor_abc",
+            }
+        )
         page2 = make_response({"items": [{"id": "last", "project_id": "p1"}]})
         mock_get.side_effect = [page1, page2]
         result = fetch_completed_tasks("tok", self.SINCE, "p1")
@@ -695,9 +759,13 @@ class TestFetchCompletedTasks:
 
     @patch("grader.requests.get")
     def test_returns_empty_when_no_project_match(self, mock_get):
-        mock_get.return_value = make_response({"items": [
-            {"id": "1", "project_id": "other"},
-        ]})
+        mock_get.return_value = make_response(
+            {
+                "items": [
+                    {"id": "1", "project_id": "other"},
+                ]
+            }
+        )
         assert fetch_completed_tasks("tok", self.SINCE, "proj_1") == []
 
     @patch("grader.requests.get")
@@ -710,6 +778,7 @@ class TestFetchCompletedTasks:
 # ---------------------------------------------------------------------------
 # print_completed_report
 # ---------------------------------------------------------------------------
+
 
 class TestPrintCompletedReport:
     def test_prints_table_with_tasks(self, capsys):
@@ -732,6 +801,7 @@ class TestPrintCompletedReport:
 # ---------------------------------------------------------------------------
 # _all_pages retry behaviour
 # ---------------------------------------------------------------------------
+
 
 def _http_error(status_code: int) -> requests.exceptions.HTTPError:
     resp = requests.models.Response()

@@ -9,7 +9,7 @@ Usage: .venv/bin/python explore_api.py
 
 import json
 import tomllib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 from todoist_api_python.api import TodoistAPI
@@ -19,8 +19,8 @@ TOKEN = cfg["todoist"]["api_token"]
 api = TodoistAPI(TOKEN)
 
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
-SINCE = datetime.now(timezone.utc) - timedelta(days=30)
-UNTIL = datetime.now(timezone.utc)
+SINCE = datetime.now(UTC) - timedelta(days=30)
+UNTIL = datetime.now(UTC)
 
 
 def pp(data, limit=2000):
@@ -28,6 +28,7 @@ def pp(data, limit=2000):
 
 
 # ---------------------------------------------------------------------------
+
 
 def show_recurring_tasks(n=5):
     print(f"\n=== Active recurring tasks (first {n}) ===")
@@ -51,7 +52,9 @@ def show_completed_by_completion_date(n=10):
             params["cursor"] = cursor
         resp = requests.get(
             "https://api.todoist.com/api/v1/tasks/completed/by_completion_date",
-            headers=HEADERS, params=params, timeout=10,
+            headers=HEADERS,
+            params=params,
+            timeout=10,
         )
         data = resp.json()
         items = data.get("items", data.get("results", []))
@@ -75,14 +78,19 @@ def show_completed_by_due_date(n=10):
     }
     resp = requests.get(
         "https://api.todoist.com/api/v1/tasks/completed/by_due_date",
-        headers=HEADERS, params=params, timeout=10,
+        headers=HEADERS,
+        params=params,
+        timeout=10,
     )
     data = resp.json()
     items = data.get("items", data.get("results", []))
     print(f"Returned: {len(items)}, next_cursor: {bool(data.get('next_cursor'))}")
     for item in items[:n]:
         is_rec = item.get("due", {}).get("is_recurring", "?") if item.get("due") else "no due"
-        print(f"  due={item.get('due',{}).get('date','?')[:10]}  recurring={is_rec}  {item['content'][:60]}")
+        print(
+            f"  due={item.get('due', {}).get('date', '?')[:10]}  "
+            f"recurring={is_rec}  {item['content'][:60]}"
+        )
     return items
 
 
@@ -90,7 +98,9 @@ def show_task_activity(task_id, task_name=""):
     print(f"\n=== tasks/activity for '{task_name}' (id={task_id}) ===")
     resp = requests.get(
         "https://api.todoist.com/api/v1/tasks/activity",
-        headers=HEADERS, params={"task_id": task_id, "limit": 10}, timeout=10,
+        headers=HEADERS,
+        params={"task_id": task_id, "limit": 10},
+        timeout=10,
     )
     print(f"Status: {resp.status_code}")
     pp(resp.json())
@@ -112,7 +122,8 @@ def show_raw_api_endpoints():
     for path in candidates:
         resp = requests.get(
             f"https://api.todoist.com/api/v1/{path}",
-            headers=HEADERS, timeout=10,
+            headers=HEADERS,
+            timeout=10,
         )
         print(f"  GET /api/v1/{path}  →  {resp.status_code}")
 
@@ -167,6 +178,7 @@ def match_recurring_vs_completed(recurring, completed):
 
 # ---------------------------------------------------------------------------
 
+
 def show_activity_log_for_task(task_id, task_name="", limit=20):
     """
     Probe the /api/v1/activity endpoint for a specific task.
@@ -176,13 +188,15 @@ def show_activity_log_for_task(task_id, task_name="", limit=20):
     print(f"\n=== /api/v1/activity for '{task_name}' (id={task_id}) ===")
     candidates = [
         ("object_id", {"object_type": "task", "object_id": task_id, "limit": limit}),
-        ("task_id",   {"task_id": task_id, "limit": limit}),
-        ("item_id",   {"object_type": "item", "object_id": task_id, "limit": limit}),
+        ("task_id", {"task_id": task_id, "limit": limit}),
+        ("item_id", {"object_type": "item", "object_id": task_id, "limit": limit}),
     ]
     for label, params in candidates:
         resp = requests.get(
             "https://api.todoist.com/api/v1/activity",
-            headers=HEADERS, params=params, timeout=10,
+            headers=HEADERS,
+            params=params,
+            timeout=10,
         )
         print(f"  params={label}  →  status={resp.status_code}")
         if resp.status_code == 200:
@@ -190,7 +204,10 @@ def show_activity_log_for_task(task_id, task_name="", limit=20):
             events = data.get("events", data.get("results", []))
             print(f"    keys={list(data.keys())}  events={len(events)}")
             for e in events[:3]:
-                print(f"    {e.get('event_date','')[:10]}  type={e.get('event_type')}  extra={e.get('extra_data',{})}")
+                print(
+                    f"    {e.get('event_date', '')[:10]}  type={e.get('event_type')}  "
+                    f"extra={e.get('extra_data', {})}"
+                )
             return data
         else:
             print(f"    {resp.text[:200]}")
@@ -202,19 +219,27 @@ def show_activities_endpoint(task_id, task_name="", limit=10):
     Explore /api/v1/activities — the correct activity log endpoint.
     Try various filter params to find recurring completions.
     """
-    print(f"\n=== /api/v1/activities — probing filter params ===")
+    print("\n=== /api/v1/activities — probing filter params ===")
     param_sets = [
-        ("no filter",           {"limit": limit}),
-        ("object_type=task",    {"object_type": "task", "limit": limit}),
-        ("event_type=completed",{"object_type": "task", "event_type": "completed", "limit": limit}),
-        ("event_type=updated",  {"object_type": "task", "event_type": "updated", "limit": limit}),
-        ("object_id=task_id",   {"object_type": "task", "object_id": task_id, "limit": limit}),
-        ("item event_type=completed", {"object_type": "item", "event_type": "completed", "limit": limit}),
+        ("no filter", {"limit": limit}),
+        ("object_type=task", {"object_type": "task", "limit": limit}),
+        (
+            "event_type=completed",
+            {"object_type": "task", "event_type": "completed", "limit": limit},
+        ),
+        ("event_type=updated", {"object_type": "task", "event_type": "updated", "limit": limit}),
+        ("object_id=task_id", {"object_type": "task", "object_id": task_id, "limit": limit}),
+        (
+            "item event_type=completed",
+            {"object_type": "item", "event_type": "completed", "limit": limit},
+        ),
     ]
     for label, params in param_sets:
         resp = requests.get(
             "https://api.todoist.com/api/v1/activities",
-            headers=HEADERS, params=params, timeout=10,
+            headers=HEADERS,
+            params=params,
+            timeout=10,
         )
         if resp.status_code != 200:
             print(f"  [{label}]  status={resp.status_code}  {resp.text[:100]}")
@@ -222,15 +247,20 @@ def show_activities_endpoint(task_id, task_name="", limit=10):
         data = resp.json()
         results = data.get("results", [])
         recurring_completions = [
-            r for r in results
-            if r.get("event_type") == "completed"
-            and r.get("extra_data", {}).get("is_recurring")
+            r
+            for r in results
+            if r.get("event_type") == "completed" and r.get("extra_data", {}).get("is_recurring")
         ]
-        print(f"  [{label}]  total={len(results)}  recurring_completions={len(recurring_completions)}")
+        print(
+            f"  [{label}]  total={len(results)}  recurring_completions={len(recurring_completions)}"
+        )
         if results:
             r0 = results[0]
             print(f"    sample keys: {list(r0.keys())}")
-            print(f"    sample: date={r0.get('event_date','')[:10]}  type={r0.get('event_type')}  extra={r0.get('extra_data',{})}")
+            print(
+                f"    sample: date={r0.get('event_date', '')[:10]}  "
+                f"type={r0.get('event_type')}  extra={r0.get('extra_data', {})}"
+            )
 
 
 def show_activities_deep_dive(task_id=None):
@@ -244,24 +274,37 @@ def show_activities_deep_dive(task_id=None):
     resp = requests.get(
         "https://api.todoist.com/api/v1/activities",
         headers=HEADERS,
-        params={"object_type": "item", "event_type": "completed", "limit": 5,
-                "since": SINCE.strftime("%Y-%m-%dT%H:%M:%S")},
+        params={
+            "object_type": "item",
+            "event_type": "completed",
+            "limit": 5,
+            "since": SINCE.strftime("%Y-%m-%dT%H:%M:%S"),
+        },
         timeout=10,
     )
     data = resp.json()
     results = data.get("results", [])
-    print(f"\n1. completed events (last 30d): {len(results)}, has_more={bool(data.get('next_cursor'))}")
+    print(
+        f"\n1. completed events (last 30d): {len(results)}, "
+        f"has_more={bool(data.get('next_cursor'))}"
+    )
     for r in results[:3]:
         extra = r.get("extra_data", {})
-        print(f"   {r['event_date'][:10]}  object_id={r['object_id']}  "
-              f"is_recurring={extra.get('is_recurring')}  content={extra.get('content','')[:40]}")
+        print(
+            f"   {r['event_date'][:10]}  object_id={r['object_id']}  "
+            f"is_recurring={extra.get('is_recurring')}  content={extra.get('content', '')[:40]}"
+        )
 
     # 2. Updated events — check field names for snooze detection
     resp2 = requests.get(
         "https://api.todoist.com/api/v1/activities",
         headers=HEADERS,
-        params={"object_type": "item", "event_type": "updated", "limit": 5,
-                "since": SINCE.strftime("%Y-%m-%dT%H:%M:%S")},
+        params={
+            "object_type": "item",
+            "event_type": "updated",
+            "limit": 5,
+            "since": SINCE.strftime("%Y-%m-%dT%H:%M:%S"),
+        },
         timeout=10,
     )
     data2 = resp2.json()
@@ -269,8 +312,10 @@ def show_activities_deep_dive(task_id=None):
     print(f"\n2. updated events (last 30d): {len(results2)}")
     for r in results2[:3]:
         extra = r.get("extra_data", {})
-        print(f"   {r['event_date'][:10]}  object_id={r['object_id']}  "
-              f"last_due_date={extra.get('last_due_date')}  due_date={extra.get('due_date')}")
+        print(
+            f"   {r['event_date'][:10]}  object_id={r['object_id']}  "
+            f"last_due_date={extra.get('last_due_date')}  due_date={extra.get('due_date')}"
+        )
 
     # 3. Filter by specific task object_id (if supported)
     if task_id:
@@ -285,8 +330,10 @@ def show_activities_deep_dive(task_id=None):
             r3 = resp3.json().get("results", [])
             print(f"   events returned: {len(r3)}")
             for r in r3[:3]:
-                print(f"   {r['event_date'][:10]}  type={r['event_type']}  "
-                      f"extra={r.get('extra_data',{})}")
+                print(
+                    f"   {r['event_date'][:10]}  type={r['event_type']}  "
+                    f"extra={r.get('extra_data', {})}"
+                )
         else:
             print(f"   {resp3.text[:200]}")
 
@@ -294,8 +341,12 @@ def show_activities_deep_dive(task_id=None):
     resp4 = requests.get(
         "https://api.todoist.com/api/v1/activities",
         headers=HEADERS,
-        params={"object_type": "item", "event_type": "completed", "limit": 200,
-                "since": SINCE.strftime("%Y-%m-%dT%H:%M:%S")},
+        params={
+            "object_type": "item",
+            "event_type": "completed",
+            "limit": 200,
+            "since": SINCE.strftime("%Y-%m-%dT%H:%M:%S"),
+        },
         timeout=10,
     )
     data4 = resp4.json()
@@ -306,8 +357,12 @@ def show_activities_deep_dive(task_id=None):
         resp5 = requests.get(
             "https://api.todoist.com/api/v1/activities",
             headers=HEADERS,
-            params={"object_type": "item", "event_type": "completed", "limit": 200,
-                    "cursor": next_cursor},
+            params={
+                "object_type": "item",
+                "event_type": "completed",
+                "limit": 200,
+                "cursor": next_cursor,
+            },
             timeout=10,
         )
         page2 = resp5.json().get("results", [])
@@ -368,11 +423,15 @@ def show_activity_log_global(limit=20):
     print(f"Recurring completions in sample: {len(recurring_completions)}")
     for e in events[:5]:
         extra = e.get("extra_data", {})
-        print(f"  {e.get('event_date','')[:10]}  id={e.get('object_id')}  isRecurring={extra.get('isRecurring')}  content={extra.get('content','')[:50]}")
+        print(
+            f"  {e.get('event_date', '')[:10]}  id={e.get('object_id')}  "
+            f"isRecurring={extra.get('isRecurring')}  content={extra.get('content', '')[:50]}"
+        )
     return data
 
 
 # ---------------------------------------------------------------------------
+
 
 def debug_grader_timing():
     """
@@ -380,6 +439,7 @@ def debug_grader_timing():
     Prints elapsed time at each stage.
     """
     import time
+
     print("\n=== Grader pipeline timing debug ===")
     t0 = time.time()
 
@@ -389,21 +449,28 @@ def debug_grader_timing():
         all_tasks.extend(page)
         print(f"   page received, total so far: {len(all_tasks)}")
     recurring = [t for t in all_tasks if t.due and t.due.is_recurring]
-    print(f"   Done in {time.time()-t0:.1f}s  — {len(all_tasks)} total, {len(recurring)} recurring")
+    print(
+        f"   Done in {time.time() - t0:.1f}s  — {len(all_tasks)} total, {len(recurring)} recurring"
+    )
 
     t1 = time.time()
-    print(f"\n2. Fetching completed events from /api/v1/activities...")
+    print("\n2. Fetching completed events from /api/v1/activities...")
     since_str = SINCE.strftime("%Y-%m-%dT%H:%M:%S")
     completed_events = []
     cursor = None
     page_n = 0
     while True:
-        params = {"object_type": "item", "event_type": "completed",
-                  "since": since_str, "limit": 100}
+        params = {
+            "object_type": "item",
+            "event_type": "completed",
+            "since": since_str,
+            "limit": 100,
+        }
         if cursor:
             params["cursor"] = cursor
-        resp = requests.get("https://api.todoist.com/api/v1/activities",
-                            headers=HEADERS, params=params, timeout=30)
+        resp = requests.get(
+            "https://api.todoist.com/api/v1/activities", headers=HEADERS, params=params, timeout=30
+        )
         data = resp.json()
         chunk = data.get("results", [])
         completed_events.extend(chunk)
@@ -412,20 +479,20 @@ def debug_grader_timing():
         print(f"   page {page_n}: {len(chunk)} events, cursor={bool(cursor)}")
         if not cursor or len(chunk) < 100:
             break
-    print(f"   Done in {time.time()-t1:.1f}s  — {len(completed_events)} completed events")
+    print(f"   Done in {time.time() - t1:.1f}s  — {len(completed_events)} completed events")
 
     t2 = time.time()
-    print(f"\n3. Fetching updated events from /api/v1/activities...")
+    print("\n3. Fetching updated events from /api/v1/activities...")
     updated_events = []
     cursor = None
     page_n = 0
     while True:
-        params = {"object_type": "item", "event_type": "updated",
-                  "since": since_str, "limit": 100}
+        params = {"object_type": "item", "event_type": "updated", "since": since_str, "limit": 100}
         if cursor:
             params["cursor"] = cursor
-        resp = requests.get("https://api.todoist.com/api/v1/activities",
-                            headers=HEADERS, params=params, timeout=30)
+        resp = requests.get(
+            "https://api.todoist.com/api/v1/activities", headers=HEADERS, params=params, timeout=30
+        )
         data = resp.json()
         chunk = data.get("results", [])
         updated_events.extend(chunk)
@@ -434,9 +501,9 @@ def debug_grader_timing():
         print(f"   page {page_n}: {len(chunk)} events, cursor={bool(cursor)}")
         if not cursor or len(chunk) < 100:
             break
-    print(f"   Done in {time.time()-t2:.1f}s  — {len(updated_events)} updated events")
+    print(f"   Done in {time.time() - t2:.1f}s  — {len(updated_events)} updated events")
 
-    print(f"\nTotal elapsed: {time.time()-t0:.1f}s")
+    print(f"\nTotal elapsed: {time.time() - t0:.1f}s")
 
 
 def debug_event_ordering():
@@ -447,22 +514,21 @@ def debug_event_ordering():
     This lets us decide whether to add an early-exit to the pagination loop.
     """
     since_str = SINCE.strftime("%Y-%m-%dT%H:%M:%S")
-    print(f"\n=== Event ordering / 'since' filter test ===")
+    print("\n=== Event ordering / 'since' filter test ===")
     print(f"since_str = {since_str}  (30 days ago)")
 
     # Fetch first page with since
     resp = requests.get(
         "https://api.todoist.com/api/v1/activities",
         headers=HEADERS,
-        params={"object_type": "item", "event_type": "completed",
-                "since": since_str, "limit": 10},
+        params={"object_type": "item", "event_type": "completed", "since": since_str, "limit": 10},
         timeout=30,
     )
     data = resp.json()
     results = data.get("results", [])
     print(f"\nFirst 10 events (with since={since_str}):")
     for r in results:
-        print(f"  {r.get('event_date','')[:10]}")
+        print(f"  {r.get('event_date', '')[:10]}")
 
     # Fetch first page WITHOUT since (to compare)
     resp2 = requests.get(
@@ -473,13 +539,13 @@ def debug_event_ordering():
     )
     data2 = resp2.json()
     results2 = data2.get("results", [])
-    print(f"\nFirst 10 events (WITHOUT since):")
+    print("\nFirst 10 events (WITHOUT since):")
     for r in results2:
-        print(f"  {r.get('event_date','')[:10]}")
+        print(f"  {r.get('event_date', '')[:10]}")
 
     # Check if page 1 with since == page 1 without since
-    dates_with    = [r.get("event_date","")[:10] for r in results]
-    dates_without = [r.get("event_date","")[:10] for r in results2]
+    dates_with = [r.get("event_date", "")[:10] for r in results]
+    dates_without = [r.get("event_date", "")[:10] for r in results2]
     print(f"\nsince filter changes results: {dates_with != dates_without}")
     print(f"dates with since:    {dates_with}")
     print(f"dates without since: {dates_without}")

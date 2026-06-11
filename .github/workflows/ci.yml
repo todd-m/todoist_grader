@@ -1,0 +1,42 @@
+# Standard CI workflow — copy to .github/workflows/ci.yml unchanged.
+# Auto-detects Python (requirements.txt) and Node (package-lock.json),
+# installs dependencies, then runs `make ci`.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: ${{ hashFiles('requirements.txt') != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        if: ${{ hashFiles('requirements.txt') != '' }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Set up Node
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Node dependencies
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci
+
+      - name: Run CI suite
+        run: make ci

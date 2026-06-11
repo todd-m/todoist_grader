@@ -1,8 +1,8 @@
 import sys
 import time
+from datetime import UTC, date, datetime, timedelta
 
 import requests
-from datetime import date, datetime, timedelta, timezone
 
 ACTIVITIES_URL = "https://api.todoist.com/api/v1/activities"
 
@@ -28,10 +28,17 @@ def get_with_retry(
                 raise
             attempt += 1
             if attempt > retries:
-                print(f"[{label}] HTTP {resp.status_code} on attempt {attempt}/{retries} — giving up", file=sys.stderr)
+                print(
+                    f"[{label}] HTTP {resp.status_code} on attempt {attempt}/{retries} — giving up",
+                    file=sys.stderr,
+                )
                 raise
-            delay = backoff ** attempt
-            print(f"[{label}] HTTP {resp.status_code} on attempt {attempt}/{retries} — retrying in {delay:.0f}s", file=sys.stderr)
+            delay = backoff**attempt
+            print(
+                f"[{label}] HTTP {resp.status_code} on attempt {attempt}/{retries} — "
+                f"retrying in {delay:.0f}s",
+                file=sys.stderr,
+            )
             time.sleep(delay)
 
 
@@ -61,8 +68,8 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
     while True:
         params: dict = {
             "object_type": "item",
-            "event_type":  event_type,
-            "limit":       100,
+            "event_type": event_type,
+            "limit": 100,
         }
         if cursor:
             params["cursor"] = cursor
@@ -91,7 +98,7 @@ def fetch_item_activities(token: str, since: datetime, event_type: str) -> list[
 
 def build_last_completion_map(token: str, lookback_days: int = 365) -> dict[str, date]:
     """Return {task_id: most_recent_completion_date} for recurring tasks only."""
-    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    since = datetime.now(UTC) - timedelta(days=lookback_days)
     events = fetch_item_activities(token, since, "completed")
     result: dict[str, date] = {}
     for event in events:

@@ -17,15 +17,17 @@ def build_dataset(rows: dict[str, list]) -> dict:
     for i, (filter_name, series) in enumerate(rows.items()):
         by_date = {row[0]: row[1] for row in series}
         color = COLORS[i % len(COLORS)]
-        datasets.append({
-            "label": filter_name,
-            "data": [by_date.get(d) for d in all_dates],
-            "borderColor": color,
-            "backgroundColor": color,
-            "tension": 0.1,
-            "pointRadius": 4,
-            "spanGaps": False,
-        })
+        datasets.append(
+            {
+                "label": filter_name,
+                "data": [by_date.get(d) for d in all_dates],
+                "borderColor": color,
+                "backgroundColor": color,
+                "tension": 0.1,
+                "pointRadius": 4,
+                "spanGaps": False,
+            }
+        )
     return {"labels": all_dates, "datasets": datasets}
 
 
@@ -54,9 +56,7 @@ def render_chart(dataset: dict, subtitle: str, index: int) -> str:
 
 def render_page(charts: list[tuple[dict, str]], title: str) -> str:
     escaped_title = _html.escape(title)
-    body_fragments = "\n".join(
-        render_chart(ds, sub, i) for i, (ds, sub) in enumerate(charts)
-    )
+    body_fragments = "\n".join(render_chart(ds, sub, i) for i, (ds, sub) in enumerate(charts))
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>

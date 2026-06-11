@@ -1,4 +1,6 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from unittest.mock import MagicMock
+from unittest.mock import patch as std_patch
 
 import pytest
 
@@ -19,30 +21,42 @@ class TestBuildLastCompletionMap:
         assert build_last_completion_map("tok") == {}
 
     def test_filters_out_non_recurring_events(self, mocker):
-        mocker.patch("todoist_api.fetch_item_activities", return_value=[
-            _event("1", "2026-05-01", is_recurring=False),
-        ])
+        mocker.patch(
+            "todoist_api.fetch_item_activities",
+            return_value=[
+                _event("1", "2026-05-01", is_recurring=False),
+            ],
+        )
         assert build_last_completion_map("tok") == {}
 
     def test_returns_date_for_recurring_task(self, mocker):
-        mocker.patch("todoist_api.fetch_item_activities", return_value=[
-            _event("1", "2026-06-01"),
-        ])
+        mocker.patch(
+            "todoist_api.fetch_item_activities",
+            return_value=[
+                _event("1", "2026-06-01"),
+            ],
+        )
         assert build_last_completion_map("tok") == {"1": date(2026, 6, 1)}
 
     def test_picks_first_event_per_task_events_newest_first(self, mocker):
         # events arrive newest-first; first seen = most recent
-        mocker.patch("todoist_api.fetch_item_activities", return_value=[
-            _event("1", "2026-06-01"),
-            _event("1", "2026-05-01"),
-        ])
+        mocker.patch(
+            "todoist_api.fetch_item_activities",
+            return_value=[
+                _event("1", "2026-06-01"),
+                _event("1", "2026-05-01"),
+            ],
+        )
         assert build_last_completion_map("tok") == {"1": date(2026, 6, 1)}
 
     def test_handles_multiple_distinct_tasks(self, mocker):
-        mocker.patch("todoist_api.fetch_item_activities", return_value=[
-            _event("1", "2026-06-01"),
-            _event("2", "2026-05-15"),
-        ])
+        mocker.patch(
+            "todoist_api.fetch_item_activities",
+            return_value=[
+                _event("1", "2026-06-01"),
+                _event("2", "2026-05-15"),
+            ],
+        )
         assert build_last_completion_map("tok") == {
             "1": date(2026, 6, 1),
             "2": date(2026, 5, 15),
@@ -63,9 +77,6 @@ class TestBuildLastCompletionMap:
 # fetch_item_activities (moved from test_grader.py)
 # ---------------------------------------------------------------------------
 
-from datetime import timezone
-from unittest.mock import MagicMock, patch as std_patch
-
 
 def _make_resp(json_data, status_code=200):
     resp = MagicMock()
@@ -73,6 +84,7 @@ def _make_resp(json_data, status_code=200):
     resp.json.return_value = json_data
     if status_code >= 400:
         import requests as _req
+
         resp.raise_for_status.side_effect = _req.HTTPError(response=resp)
     else:
         resp.raise_for_status.return_value = None
@@ -118,6 +130,7 @@ class TestGetWithRetry:
     @std_patch("todoist_api.requests.get")
     def test_exhausts_retries_and_raises(self, mock_get, mock_sleep):
         import requests as _req
+
         mock_get.return_value = _make_resp({}, 503)
         with pytest.raises(_req.HTTPError):
             self._call(retries=3)
@@ -127,6 +140,7 @@ class TestGetWithRetry:
     @std_patch("todoist_api.requests.get")
     def test_4xx_raises_immediately_without_retry(self, mock_get, mock_sleep):
         import requests as _req
+
         mock_get.return_value = _make_resp({}, 401)
         with pytest.raises(_req.HTTPError):
             self._call()
@@ -137,6 +151,7 @@ class TestGetWithRetry:
     @std_patch("todoist_api.requests.get")
     def test_sleep_uses_exponential_backoff(self, mock_get, mock_sleep):
         import requests as _req
+
         mock_get.return_value = _make_resp({}, 503)
         with pytest.raises(_req.HTTPError):
             self._call(retries=3, backoff=2.0)
@@ -145,24 +160,34 @@ class TestGetWithRetry:
 
 
 class TestFetchItemActivities:
-    SINCE = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    SINCE = datetime(2024, 1, 1, tzinfo=UTC)
 
     @std_patch("todoist_api.requests.get")
     def test_returns_results_from_single_page(self, mock_get):
-        mock_get.return_value = _make_resp({"results": [
-            {"object_id": "1", "event_date": "2024-03-01T09:00:00Z"},
-            {"object_id": "2", "event_date": "2024-03-02T09:00:00Z"},
-        ]})
+        mock_get.return_value = _make_resp(
+            {
+                "results": [
+                    {"object_id": "1", "event_date": "2024-03-01T09:00:00Z"},
+                    {"object_id": "2", "event_date": "2024-03-02T09:00:00Z"},
+                ]
+            }
+        )
         result = fetch_item_activities("tok", self.SINCE, "completed")
         assert len(result) == 2
 
     @std_patch("todoist_api.requests.get")
     def test_paginates_via_next_cursor(self, mock_get):
-        full_page = _make_resp({
-            "results": [{"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(100)],
-            "next_cursor": "cursor_abc",
-        })
-        last_page = _make_resp({"results": [{"object_id": "x", "event_date": "2024-03-02T09:00:00Z"}]})
+        full_page = _make_resp(
+            {
+                "results": [
+                    {"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(100)
+                ],
+                "next_cursor": "cursor_abc",
+            }
+        )
+        last_page = _make_resp(
+            {"results": [{"object_id": "x", "event_date": "2024-03-02T09:00:00Z"}]}
+        )
         mock_get.side_effect = [full_page, last_page]
         result = fetch_item_activities("tok", self.SINCE, "completed")
         assert len(result) == 101
@@ -189,6 +214,7 @@ class TestFetchItemActivities:
     @std_patch("todoist_api.requests.get")
     def test_raises_on_http_error(self, mock_get):
         import requests as _req
+
         mock_get.return_value = _make_resp({}, status_code=500)
         with pytest.raises(_req.HTTPError):
             fetch_item_activities("tok", self.SINCE, "completed")
@@ -213,10 +239,14 @@ class TestFetchItemActivities:
 
     @std_patch("todoist_api.requests.get")
     def test_passes_cursor_on_subsequent_requests(self, mock_get):
-        full_page = _make_resp({
-            "results": [{"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(100)],
-            "next_cursor": "cursor_xyz",
-        })
+        full_page = _make_resp(
+            {
+                "results": [
+                    {"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(100)
+                ],
+                "next_cursor": "cursor_xyz",
+            }
+        )
         last_page = _make_resp({"results": []})
         mock_get.side_effect = [full_page, last_page]
         fetch_item_activities("tok", self.SINCE, "completed")
@@ -226,11 +256,13 @@ class TestFetchItemActivities:
     @std_patch("todoist_api.requests.get")
     def test_stops_early_when_events_predate_since(self, mock_get):
         in_window = [{"object_id": str(i), "event_date": "2024-03-01T09:00:00Z"} for i in range(98)]
-        too_old   = [{"object_id": "old", "event_date": "2023-12-01T09:00:00Z"}] * 2
-        mock_get.return_value = _make_resp({
-            "results": in_window + too_old,
-            "next_cursor": "cursor_would_not_be_used",
-        })
+        too_old = [{"object_id": "old", "event_date": "2023-12-01T09:00:00Z"}] * 2
+        mock_get.return_value = _make_resp(
+            {
+                "results": in_window + too_old,
+                "next_cursor": "cursor_would_not_be_used",
+            }
+        )
         result = fetch_item_activities("tok", self.SINCE, "completed")
         assert len(result) == 98
         assert mock_get.call_count == 1

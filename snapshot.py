@@ -14,7 +14,7 @@ import db
 import graph
 from todoist_api import build_last_completion_map, get_with_retry
 
-SYNC_URL   = "https://api.todoist.com/api/v1/sync"
+SYNC_URL = "https://api.todoist.com/api/v1/sync"
 FILTER_URL = "https://api.todoist.com/api/v1/tasks/filter"
 
 
@@ -58,7 +58,9 @@ def resolve_filters(
     return resolved
 
 
-def fetch_filter_tasks(token: str, query: str, retries: int = 3, backoff: float = 2.0) -> list[dict]:
+def fetch_filter_tasks(
+    token: str, query: str, retries: int = 3, backoff: float = 2.0
+) -> list[dict]:
     headers = {"Authorization": f"Bearer {token}"}
     tasks: list[dict] = []
     cursor: str | None = None
@@ -160,8 +162,11 @@ def _render_graph(snap_cfg: dict, history: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--graph-only", action="store_true",
-                        help="Re-render graph from existing DB data without fetching new snapshots")
+    parser.add_argument(
+        "--graph-only",
+        action="store_true",
+        help="Re-render graph from existing DB data without fetching new snapshots",
+    )
     args, _ = parser.parse_known_args()
 
     cfg = load_config()
@@ -175,7 +180,8 @@ def main() -> None:
         conn = db.init_db(db_path)
         try:
             filter_names = [
-                row[0] for row in conn.execute(
+                row[0]
+                for row in conn.execute(
                     "SELECT DISTINCT filter_name FROM snapshots ORDER BY filter_name"
                 ).fetchall()
             ]
@@ -229,7 +235,11 @@ def main() -> None:
     except requests.HTTPError as exc:
         if exc.response is None or exc.response.status_code < 500:
             raise
-        print(f"Warning: activities endpoint returned {exc.response.status_code} — avg age skipped for this run", file=sys.stderr)
+        print(
+            f"Warning: activities endpoint returned {exc.response.status_code} — "
+            f"avg age skipped for this run",
+            file=sys.stderr,
+        )
         avg_ages = {display_name: None for _, display_name, _ in resolved}
 
     conn = db.init_db(db_path)
@@ -248,8 +258,8 @@ def main() -> None:
         header_style="bold",
         border_style="dim",
     )
-    table.add_column("Filter",  style="cyan")
-    table.add_column("Count",   justify="right")
+    table.add_column("Filter", style="cyan")
+    table.add_column("Count", justify="right")
     table.add_column("Δ prior", justify="right")
     table.add_column("Avg Age", justify="right")
 

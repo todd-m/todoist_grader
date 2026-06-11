@@ -42,7 +42,7 @@ import argparse
 import sys
 import time
 import tomllib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -52,7 +52,7 @@ from todoist_api_python.api import TodoistAPI
 
 from todoist_api import fetch_item_activities
 
-COMPLETED_URL  = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
+COMPLETED_URL = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
 
 # The three label names this script manages
 GRADE_LABEL_NAMES: tuple[str, ...] = ("grade:A", "grade:B", "grade:C")
@@ -69,6 +69,7 @@ LABEL_COLOURS = {
 # Config & CLI
 # ---------------------------------------------------------------------------
 
+
 def load_config(path: str) -> dict:
     p = Path(path)
     if not p.exists():
@@ -83,31 +84,40 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--config", default="config.toml", metavar="PATH",
+        "--config",
+        default="config.toml",
+        metavar="PATH",
         help="Path to config.toml (default: config.toml)",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Print planned changes without writing to Todoist",
     )
     parser.add_argument(
-        "--summary", action="store_true",
+        "--summary",
+        action="store_true",
         help="Print a rich summary table after grading",
     )
     parser.add_argument(
-        "--today", action="store_true",
+        "--today",
+        action="store_true",
         help="Filter reports to tasks due today (recurring and non-recurring)",
     )
     parser.add_argument(
-        "--completed", action="store_true",
+        "--completed",
+        action="store_true",
         help="Show completed tasks for a project over the past N days",
     )
     parser.add_argument(
-        "--project", metavar="NAME",
+        "--project",
+        metavar="NAME",
         help="Project name (used with --completed)",
     )
     parser.add_argument(
-        "--days", type=int, default=None,
+        "--days",
+        type=int,
+        default=None,
         help="Lookback window in days (default: 7 for --completed, config value for grading)",
     )
     return parser.parse_args()
@@ -117,9 +127,11 @@ def parse_args() -> argparse.Namespace:
 # SDK helper
 # ---------------------------------------------------------------------------
 
+
 def _all_pages(paginator, retries: int = 3, backoff: float = 2.0) -> list:
     """Flatten a v3 SDK ResultsPaginator into a single list, retrying on 5xx errors."""
     import requests as _requests
+
     results = []
     page_iter = iter(paginator)
     attempt = 0
@@ -136,8 +148,10 @@ def _all_pages(paginator, retries: int = 3, backoff: float = 2.0) -> list:
             attempt += 1
             if attempt > retries:
                 raise
-            wait = backoff ** attempt
-            print(f"Todoist API error ({exc}); retrying in {wait:.0f}s… (attempt {attempt}/{retries})")
+            wait = backoff**attempt
+            print(
+                f"Todoist API error ({exc}); retrying in {wait:.0f}s… (attempt {attempt}/{retries})"
+            )
             time.sleep(wait)
     return results
 
@@ -145,6 +159,7 @@ def _all_pages(paginator, retries: int = 3, backoff: float = 2.0) -> list:
 # ---------------------------------------------------------------------------
 # Grading logic
 # ---------------------------------------------------------------------------
+
 
 def completion_dates_for(task_id: str, completed_events: list[dict]) -> set[str]:
     """
@@ -187,7 +202,7 @@ def count_snoozes(
             continue
         extra = event.get("extra_data") or {}
         if "last_due_date" not in extra:
-            continue                     # due date was not touched
+            continue  # due date was not touched
         event_day = (event.get("event_date") or "")[:10]
         if event_day not in completion_dates:
             count += 1
@@ -219,9 +234,7 @@ def nonrecurring_snooze_report(
         snooze_counts[tid] = snooze_counts.get(tid, 0) + 1
 
     rows = [
-        {"task": task_map[tid], "snoozes": n}
-        for tid, n in snooze_counts.items()
-        if tid in task_map
+        {"task": task_map[tid], "snoozes": n} for tid, n in snooze_counts.items() if tid in task_map
     ]
     return sorted(rows, key=lambda r: r["snoozes"])
 
@@ -237,6 +250,7 @@ def assign_grade(rate: float, thresholds: dict) -> str:
 # ---------------------------------------------------------------------------
 # Label management
 # ---------------------------------------------------------------------------
+
 
 def ensure_grade_labels(api: TodoistAPI, dry_run: bool) -> None:
     """Create grade:A / grade:B / grade:C labels in Todoist if they are missing."""
@@ -254,6 +268,7 @@ def ensure_grade_labels(api: TodoistAPI, dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 # Completed-tasks report
 # ---------------------------------------------------------------------------
+
 
 def resolve_project_id(api: TodoistAPI, name: str) -> str:
     """Look up a Todoist project by name (case-insensitive). Exit if not found."""
@@ -282,7 +297,7 @@ def fetch_completed_tasks(token: str, since: datetime, project_id: str) -> list[
     while True:
         params: dict = {
             "since": since.isoformat(),
-            "until": datetime.now(timezone.utc).isoformat(),
+            "until": datetime.now(UTC).isoformat(),
             "limit": 200,
         }
         if cursor:
@@ -338,9 +353,10 @@ def print_completed_report(completed: list[dict], project_name: str, days: int) 
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     args = parse_args()
-    cfg  = load_config(args.config)
+    cfg = load_config(args.config)
 
     # ── Config values ──────────────────────────────────────────────────────
     try:
@@ -355,8 +371,11 @@ def main() -> None:
         if not args.project:
             sys.exit("--completed requires --project <name>")
         comp_days = args.days if args.days is not None else 7
-        comp_since = (datetime.now(timezone.utc) - timedelta(days=comp_days)).replace(
-            hour=0, minute=0, second=0, microsecond=0,
+        comp_since = (datetime.now(UTC) - timedelta(days=comp_days)).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
         )
         project_id = resolve_project_id(api, args.project)
         print(f"Fetching completed tasks for {args.project!r} (past {comp_days} days)…")
@@ -366,11 +385,11 @@ def main() -> None:
 
     # ── Grading config ────────────────────────────────────────────────────
     grading_cfg = cfg.get("grading", {})
-    days        = args.days if args.days is not None else int(grading_cfg.get("days", 30))
-    thresholds  = grading_cfg.get("thresholds", {"A": 0.85, "B": 0.65})
+    days = args.days if args.days is not None else int(grading_cfg.get("days", 30))
+    thresholds = grading_cfg.get("thresholds", {"A": 0.85, "B": 0.65})
     write_delay = float(cfg.get("rate_limit", {}).get("write_delay_seconds", 0.5))
 
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since = datetime.now(UTC) - timedelta(days=days)
 
     # ── Fetch ──────────────────────────────────────────────────────────────
     print("Fetching tasks…")
@@ -380,7 +399,7 @@ def main() -> None:
 
     print(f"Fetching activity log for the past {days} days…")
     completed_events = fetch_item_activities(token, since, "completed")
-    updated_events   = fetch_item_activities(token, since, "updated")
+    updated_events = fetch_item_activities(token, since, "updated")
     print(f"  {len(completed_events)} completed events, {len(updated_events)} updated events")
 
     # ── Ensure labels exist ────────────────────────────────────────────────
@@ -390,37 +409,42 @@ def main() -> None:
     # ── Calculate grades ───────────────────────────────────────────────────
     results: list[dict] = []
     for task in recurring:
-        tid        = str(task.id)
+        tid = str(task.id)
         comp_dates = completion_dates_for(tid, completed_events)
-        snoozes    = count_snoozes(tid, updated_events, comp_dates)
-        comps      = len(comp_dates)
-        total      = comps + snoozes
-        rate       = comps / total if total else 0.0
-        grade      = assign_grade(rate, thresholds)
-        results.append({
-            "task":    task,
-            "comps":   comps,
-            "snoozes": snoozes,
-            "rate":    rate,
-            "grade":   grade,
-        })
+        snoozes = count_snoozes(tid, updated_events, comp_dates)
+        comps = len(comp_dates)
+        total = comps + snoozes
+        rate = comps / total if total else 0.0
+        grade = assign_grade(rate, thresholds)
+        results.append(
+            {
+                "task": task,
+                "comps": comps,
+                "snoozes": snoozes,
+                "rate": rate,
+                "grade": grade,
+            }
+        )
 
     # ── Build report view (optionally filtered to today) ───────────────────
     nr_snoozed = nonrecurring_snooze_report(all_tasks, updated_events)
     if args.today:
-        today_str      = datetime.now().strftime("%Y-%m-%d")
-        def _due_today(r): return r["task"].due and str(r["task"].due.date)[:10] == today_str
-        report_results  = [r for r in results   if _due_today(r)]
-        nr_snoozed      = [r for r in nr_snoozed if _due_today(r)]
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        def _due_today(r):
+            return r["task"].due and str(r["task"].due.date)[:10] == today_str
+
+        report_results = [r for r in results if _due_today(r)]
+        nr_snoozed = [r for r in nr_snoozed if _due_today(r)]
         recurring_title = f"Recurring Tasks Due Today  (grades over past {days} days)"
-        nr_title        = "Non-Recurring Tasks Due Today: Snooze Counts"
-        nr_header       = "Non-recurring tasks due today that have been snoozed"
+        nr_title = "Non-Recurring Tasks Due Today: Snooze Counts"
+        nr_header = "Non-recurring tasks due today that have been snoozed"
     else:
-        today_str       = None
-        report_results  = results
+        today_str = None
+        report_results = results
         recurring_title = f"Recurring Task Grades  (past {days} days)"
-        nr_title        = f"Non-Recurring Tasks: Snooze Counts  (past {days} days)"
-        nr_header       = f"Non-recurring tasks snoozed in the past {days} days"
+        nr_title = f"Non-Recurring Tasks: Snooze Counts  (past {days} days)"
+        nr_header = f"Non-recurring tasks snoozed in the past {days} days"
 
     # ── Apply labels ───────────────────────────────────────────────────────
     print("\nApplying grade labels…")
@@ -429,17 +453,20 @@ def main() -> None:
     # Collect pending changes first so we can preview before writing
     pending = []
     for r in results:
-        task      = r["task"]
+        task = r["task"]
         new_label = f"grade:{r['grade']}"
-        old       = list(task.labels or [])
-        new       = [lbl for lbl in old if lbl not in grade_label_set] + [new_label]
+        old = list(task.labels or [])
+        new = [lbl for lbl in old if lbl not in grade_label_set] + [new_label]
         if set(old) != set(new):
-            pending.append({
-                "task":       task,
-                "new_labels": new,
-                "line":       (f"  {task.content!r:50s}  "
-                               f"rate={r['rate']:5.1%}  →  grade:{r['grade']}"),
-            })
+            pending.append(
+                {
+                    "task": task,
+                    "new_labels": new,
+                    "line": (
+                        f"  {task.content!r:50s}  rate={r['rate']:5.1%}  →  grade:{r['grade']}"
+                    ),
+                }
+            )
 
     if not pending:
         print("  All tasks already have the correct grade label.")
@@ -468,7 +495,7 @@ def main() -> None:
     # ── Summary table ──────────────────────────────────────────────────────
     if args.summary:
         grade_style = {"A": "bold green", "B": "bold yellow", "C": "bold red"}
-        console     = Console()
+        console = Console()
 
         table = Table(
             title=recurring_title,
@@ -477,14 +504,14 @@ def main() -> None:
             border_style="dim",
             show_lines=False,
         )
-        table.add_column("Task",        style="cyan", no_wrap=False, max_width=55)
+        table.add_column("Task", style="cyan", no_wrap=False, max_width=55)
         table.add_column("Completions", justify="right")
-        table.add_column("Snoozes",     justify="right")
-        table.add_column("Rate",        justify="right")
-        table.add_column("Grade",       justify="center")
+        table.add_column("Snoozes", justify="right")
+        table.add_column("Rate", justify="right")
+        table.add_column("Grade", justify="center")
 
         for r in sorted(report_results, key=lambda x: -x["rate"]):
-            g   = r["grade"]
+            g = r["grade"]
             sty = grade_style[g]
             table.add_row(
                 r["task"].content,
@@ -504,7 +531,7 @@ def main() -> None:
                 border_style="dim",
                 show_lines=False,
             )
-            nr_table.add_column("Task",    style="cyan", no_wrap=False, max_width=55)
+            nr_table.add_column("Task", style="cyan", no_wrap=False, max_width=55)
             nr_table.add_column("Snoozes", justify="right")
             for r in nr_snoozed:
                 nr_table.add_row(r["task"].content, str(r["snoozes"]))

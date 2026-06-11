@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,9 +9,13 @@ import db
 import db as db_module
 import graph
 from db import SnapshotRow
-from datetime import date
-
-from snapshot import fetch_todoist_filters, resolve_filters, fetch_filter_tasks, compute_avg_age, main
+from snapshot import (
+    compute_avg_age,
+    fetch_filter_tasks,
+    fetch_todoist_filters,
+    main,
+    resolve_filters,
+)
 
 
 # DB tests use a real in-memory SQLite connection — no mocking needed since sqlite3 has no I/O cost.
@@ -23,15 +28,11 @@ def conn():
 
 class TestInitDb:
     def test_creates_snapshots_table(self, conn):
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         assert ("snapshots",) in tables
 
     def test_creates_index(self, conn):
-        indexes = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        ).fetchall()
+        indexes = conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
         assert ("idx_snapshots_filter",) in indexes
 
     def test_creates_avg_age_days_column(self, conn):
@@ -39,7 +40,7 @@ class TestInitDb:
         assert "avg_age_days" in cols
 
     def test_migration_adds_column_to_existing_db(self, tmp_path):
-        import sqlite3
+
         db_file = str(tmp_path / "old.db")
         old_conn = sqlite3.connect(db_file)
         old_conn.execute("""
@@ -51,7 +52,9 @@ class TestInitDb:
                 UNIQUE (created_on, filter_name)
             )
         """)
-        old_conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_filter ON snapshots (filter_name, created_on)")
+        old_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_filter ON snapshots (filter_name, created_on)"
+        )
         old_conn.commit()
         old_conn.close()
         conn2 = db.init_db(db_file)
@@ -79,9 +82,7 @@ class TestWriteSnapshot:
 
     def test_inserts_row_with_avg_age(self, conn):
         db.write_snapshot(conn, "2026-06-01", "next 7 days", 42, avg_age_days=18.5)
-        row = conn.execute(
-            "SELECT avg_age_days FROM snapshots"
-        ).fetchone()
+        row = conn.execute("SELECT avg_age_days FROM snapshots").fetchone()
         assert row[0] == pytest.approx(18.5)
 
     def test_idempotent_overwrite(self, conn):
@@ -144,18 +145,26 @@ def _make_resp(json_data, status_code=200):
 class TestFetchTodoistFilters:
     @patch("snapshot.requests.post")
     def test_returns_lowercase_keyed_dict(self, mock_post):
-        mock_post.return_value = _make_resp({"filters": [
-            {"name": "Next 7 Days", "query": "7 days", "is_deleted": False},
-        ]})
+        mock_post.return_value = _make_resp(
+            {
+                "filters": [
+                    {"name": "Next 7 Days", "query": "7 days", "is_deleted": False},
+                ]
+            }
+        )
         result = fetch_todoist_filters("tok")
         assert "next 7 days" in result
         assert result["next 7 days"] == ("Next 7 Days", "7 days")
 
     @patch("snapshot.requests.post")
     def test_excludes_deleted_filters(self, mock_post):
-        mock_post.return_value = _make_resp({"filters": [
-            {"name": "Old Filter", "query": "something", "is_deleted": True},
-        ]})
+        mock_post.return_value = _make_resp(
+            {
+                "filters": [
+                    {"name": "Old Filter", "query": "something", "is_deleted": True},
+                ]
+            }
+        )
         assert fetch_todoist_filters("tok") == {}
 
     @patch("snapshot.requests.post")
@@ -175,7 +184,7 @@ class TestFetchTodoistFilters:
 
 class TestResolveFilters:
     TODOIST: dict[str, tuple[str, str]] = {
-        "next 7 days":  ("Next 7 Days",  "7 days & !subtask"),
+        "next 7 days": ("Next 7 Days", "7 days & !subtask"),
         "next 30 days": ("Next 30 Days", "30 days & !subtask"),
     }
 
@@ -337,13 +346,19 @@ class TestMain:
             for row in prior_rows:
                 db_module.write_snapshot(conn, *row)
 
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {"filters": ["next 7 days"], "db_path": "irrelevant"},
-        })
-        mocker.patch("snapshot.fetch_todoist_filters", return_value={
-            "next 7 days": ("Next 7 Days", "7 days"),
-        })
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {"filters": ["next 7 days"], "db_path": "irrelevant"},
+            },
+        )
+        mocker.patch(
+            "snapshot.fetch_todoist_filters",
+            return_value={
+                "next 7 days": ("Next 7 Days", "7 days"),
+            },
+        )
         mocker.patch(
             "snapshot.fetch_filter_tasks",
             side_effect=lambda tok, q, **kw: [{}] * counts.get(q, 0),
@@ -356,6 +371,7 @@ class TestMain:
 
     def _patch_date(self, mocker, iso: str):
         from datetime import date as real_date
+
         mock_date = MagicMock()
         real_today = real_date.fromisoformat(iso)
         mock_date.today.return_value = real_today
@@ -406,7 +422,7 @@ class TestMain:
         main()
         out = capsys.readouterr().out
         assert "42" in out
-        assert "0" in out       # delta column shows "0", not em dash or blank
+        assert "0" in out  # delta column shows "0", not em dash or blank
         assert "+0" not in out  # zero delta must not be formatted as "+0"
 
     def test_completion_map_5xx_stores_none_avg_ages(self, mocker, capsys):
@@ -449,25 +465,34 @@ class TestMain:
             main()
 
     def test_exits_when_snapshots_section_missing(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-        })
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+            },
+        )
         with pytest.raises(SystemExit):
             main()
 
     def test_exits_when_filters_empty(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {"filters": [], "db_path": "irrelevant"},
-        })
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {"filters": [], "db_path": "irrelevant"},
+            },
+        )
         with pytest.raises(SystemExit):
             main()
 
     def test_exits_when_no_filters_matched(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {"filters": ["bogus filter"], "db_path": "irrelevant"},
-        })
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {"filters": ["bogus filter"], "db_path": "irrelevant"},
+            },
+        )
         mocker.patch("snapshot.fetch_todoist_filters", return_value={})
         with pytest.raises(SystemExit):
             main()
@@ -498,23 +523,30 @@ class TestMain:
         assert len(charts) == 1
 
     def test_solo_filter_calls_render_page_with_two_charts(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {
-                "filters": ["next 7 days", "next 30 days"],
-                "db_path": "irrelevant",
-                "solo_filters": ["next 30 days"],
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {
+                    "filters": ["next 7 days", "next 30 days"],
+                    "db_path": "irrelevant",
+                    "solo_filters": ["next 30 days"],
+                },
             },
-        })
-        mocker.patch("snapshot.fetch_todoist_filters", return_value={
-            "next 7 days":  ("Next 7 Days",  "7 days"),
-            "next 30 days": ("Next 30 Days", "30 days"),
-        })
+        )
+        mocker.patch(
+            "snapshot.fetch_todoist_filters",
+            return_value={
+                "next 7 days": ("Next 7 Days", "7 days"),
+                "next 30 days": ("Next 30 Days", "30 days"),
+            },
+        )
         mocker.patch(
             "snapshot.fetch_filter_tasks",
             side_effect=lambda tok, q, **kw: [{}] * {"7 days": 10, "30 days": 100}.get(q, 0),
         )
         import db as db_module
+
         conn = db_module.init_db(":memory:")
         mocker.patch("snapshot.build_last_completion_map", return_value={})
         mocker.patch("snapshot.db.init_db", return_value=conn)
@@ -546,22 +578,29 @@ class TestMain:
         assert "Avg Task Age (days)" in subtitles
 
     def test_solo_filter_gets_separate_age_chart(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {
-                "filters": ["next 7 days"],
-                "solo_filters": ["next 30 days"],
-                "db_path": "irrelevant",
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {
+                    "filters": ["next 7 days"],
+                    "solo_filters": ["next 30 days"],
+                    "db_path": "irrelevant",
+                },
             },
-        })
-        mocker.patch("snapshot.fetch_todoist_filters", return_value={
-            "next 7 days":  ("Next 7 Days",  "7 days"),
-            "next 30 days": ("Next 30 Days", "30 days"),
-        })
+        )
+        mocker.patch(
+            "snapshot.fetch_todoist_filters",
+            return_value={
+                "next 7 days": ("Next 7 Days", "7 days"),
+                "next 30 days": ("Next 30 Days", "30 days"),
+            },
+        )
         mocker.patch("snapshot.fetch_filter_tasks", side_effect=lambda tok, q, **kw: [{}] * 5)
         mocker.patch("snapshot.build_last_completion_map", return_value={})
         mocker.patch("snapshot.compute_avg_age", return_value=10.0)
         import db as db_module
+
         conn = db_module.init_db(":memory:")
         mocker.patch("snapshot.db.init_db", return_value=conn)
         mocker.patch("snapshot.graph.write_graph")
@@ -571,26 +610,33 @@ class TestMain:
         main()
         charts, _ = mock_render.call_args.args
         subtitles = [sub for _, sub in charts]
-        assert "Avg Task Age (days)" in subtitles               # main age chart
+        assert "Avg Task Age (days)" in subtitles  # main age chart
         assert "Next 30 Days — Avg Task Age (days)" in subtitles  # solo age chart
 
     def test_solo_filter_matching_is_case_insensitive(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {
-                "filters": ["next 7 days"],
-                "db_path": "irrelevant",
-                "solo_filters": ["NEXT 7 DAYS"],
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {
+                    "filters": ["next 7 days"],
+                    "db_path": "irrelevant",
+                    "solo_filters": ["NEXT 7 DAYS"],
+                },
             },
-        })
-        mocker.patch("snapshot.fetch_todoist_filters", return_value={
-            "next 7 days": ("Next 7 Days", "7 days"),
-        })
+        )
+        mocker.patch(
+            "snapshot.fetch_todoist_filters",
+            return_value={
+                "next 7 days": ("Next 7 Days", "7 days"),
+            },
+        )
         mocker.patch(
             "snapshot.fetch_filter_tasks",
             side_effect=lambda tok, q, **kw: [{}] * 42,
         )
         import db as db_module
+
         conn = db_module.init_db(":memory:")
         mocker.patch("snapshot.build_last_completion_map", return_value={})
         mocker.patch("snapshot.db.init_db", return_value=conn)
@@ -604,24 +650,31 @@ class TestMain:
         assert "Next 7 Days" in subtitles
 
     def test_solo_filter_not_in_filters_is_still_fetched(self, mocker):
-        mocker.patch("snapshot.load_config", return_value={
-            "todoist": {"api_token": "tok"},
-            "snapshots": {
-                "filters": ["next 7 days"],
-                "db_path": "irrelevant",
-                "solo_filters": ["next year"],   # not in filters
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={
+                "todoist": {"api_token": "tok"},
+                "snapshots": {
+                    "filters": ["next 7 days"],
+                    "db_path": "irrelevant",
+                    "solo_filters": ["next year"],  # not in filters
+                },
             },
-        })
-        mocker.patch("snapshot.fetch_todoist_filters", return_value={
-            "next 7 days": ("Next 7 Days", "7 days"),
-            "next year":   ("Next Year",   "next year"),
-        })
+        )
+        mocker.patch(
+            "snapshot.fetch_todoist_filters",
+            return_value={
+                "next 7 days": ("Next 7 Days", "7 days"),
+                "next year": ("Next Year", "next year"),
+            },
+        )
         mocker.patch(
             "snapshot.fetch_filter_tasks",
             side_effect=lambda tok, q, **kw: [{}] * {"7 days": 10, "next year": 100}.get(q, 0),
         )
         mocker.patch("snapshot.build_last_completion_map", return_value={})
         import db as db_module
+
         conn = db_module.init_db(":memory:")
         mocker.patch("snapshot.db.init_db", return_value=conn)
         mocker.patch("snapshot.graph.write_graph")
@@ -632,16 +685,22 @@ class TestMain:
         charts, _ = mock_render.call_args.args
         assert len(charts) == 2
         subtitles = [sub for _, sub in charts]
-        assert "" in subtitles           # main chart
+        assert "" in subtitles  # main chart
         assert "Next Year" in subtitles  # solo chart
 
 
 class TestReadLastNDays:
     def test_returns_last_7_days_and_excludes_older(self, conn):
         for d, count in [
-            ("2026-05-28", 10), ("2026-05-29", 11), ("2026-05-30", 12),
-            ("2026-05-31", 13), ("2026-06-01", 14), ("2026-06-02", 15),
-            ("2026-06-03", 16), ("2026-06-04", 17), ("2026-06-05", 18),
+            ("2026-05-28", 10),
+            ("2026-05-29", 11),
+            ("2026-05-30", 12),
+            ("2026-05-31", 13),
+            ("2026-06-01", 14),
+            ("2026-06-02", 15),
+            ("2026-06-03", 16),
+            ("2026-06-04", 17),
+            ("2026-06-05", 18),
             ("2026-06-06", 19),
         ]:
             db.write_snapshot(conn, d, "Next 7 Days", count)
@@ -698,7 +757,7 @@ class TestReadLastNDays:
 class TestBuildDataset:
     def test_labels_are_sorted_union_of_all_dates(self):
         rows = {
-            "Next 7 Days":  [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
+            "Next 7 Days": [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
             "Next 30 Days": [("2026-06-05", 20), ("2026-06-06", 21)],
         }
         result = graph.build_dataset(rows)
@@ -706,7 +765,7 @@ class TestBuildDataset:
 
     def test_missing_date_produces_none_in_series(self):
         rows = {
-            "Next 7 Days":  [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
+            "Next 7 Days": [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
             "Next 30 Days": [("2026-06-05", 20), ("2026-06-06", 21)],
         }
         result = graph.build_dataset(rows)
@@ -723,7 +782,7 @@ class TestBuildDataset:
 
     def test_empty_filter_produces_all_none_series(self):
         rows = {
-            "Next 7 Days":  [("2026-06-06", 42)],
+            "Next 7 Days": [("2026-06-06", 42)],
             "Next 30 Days": [],
         }
         result = graph.build_dataset(rows)
