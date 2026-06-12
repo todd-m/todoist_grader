@@ -152,7 +152,7 @@ def _render_graph(snap_cfg: dict, history: dict) -> None:
         charts.append((graph.build_dataset({name: series}), f"{name} — Avg Task Age (days)"))
 
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
-    html = graph.render_page(charts, "Task Snapshots — Last 7 Days")
+    html = graph.render_page(charts, "Task Snapshots — Last 30 Days")
     graph.write_graph(html, graph_path)
     try:
         subprocess.run(["open", graph_path])

@@ -63,7 +63,7 @@ def read_latest_before(conn: sqlite3.Connection, before_date: str) -> dict[str, 
 def read_last_n_days(
     conn: sqlite3.Connection,
     filter_names: list[str],
-    n: int = 7,
+    n: int = 30,
     as_of: str | None = None,
 ) -> dict[str, list[SnapshotRow]]:
     if not filter_names:

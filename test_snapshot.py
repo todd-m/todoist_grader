@@ -753,6 +753,14 @@ class TestReadLastNDays:
         result = db.read_last_n_days(conn, ["Next 7 Days"], n=7, as_of="2026-06-06")
         assert result["Next 7 Days"] == []
 
+    def test_default_window_is_30_days(self, conn):
+        db.write_snapshot(conn, "2026-05-31", "Next 7 Days", 1)  # 31 days back: excluded
+        db.write_snapshot(conn, "2026-06-01", "Next 7 Days", 2)  # 30 days back: included
+        db.write_snapshot(conn, "2026-06-30", "Next 7 Days", 3)
+        result = db.read_last_n_days(conn, ["Next 7 Days"], as_of="2026-06-30")
+        rows = result["Next 7 Days"]
+        assert [(r.date, r.count) for r in rows] == [("2026-06-01", 2), ("2026-06-30", 3)]
+
 
 class TestBuildDataset:
     def test_labels_are_sorted_union_of_all_dates(self):
