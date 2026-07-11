@@ -211,8 +211,9 @@ class TestFetchItemActivities:
         _, kwargs = mock_get.call_args
         assert kwargs["headers"]["Authorization"] == "Bearer mytoken"
 
+    @std_patch("todoist_api.time.sleep")
     @std_patch("todoist_api.requests.get")
-    def test_raises_on_http_error(self, mock_get):
+    def test_raises_on_http_error(self, mock_get, mock_sleep):
         import requests as _req
 
         mock_get.return_value = _make_resp({}, status_code=500)

@@ -334,6 +334,15 @@ class TestComputeAvgAge:
 
 
 class TestMain:
+    @pytest.fixture(autouse=True)
+    def _close_conns(self):
+        # main() closes the conn itself on happy paths; closing again is a no-op.
+        # This catches tests where main() raises before ever calling db.init_db.
+        self._conns: list = []
+        yield
+        for conn in self._conns:
+            conn.close()
+
     def _patched_conn(self, mocker, counts: dict[str, int], prior_rows=None):
         """
         Returns an in-memory SQLite connection, pre-populated with prior_rows if given,
@@ -342,6 +351,7 @@ class TestMain:
         prior_rows: [(created_on, filter_name, task_count), ...]
         """
         conn = db_module.init_db(":memory:")
+        self._conns.append(conn)
         if prior_rows:
             for row in prior_rows:
                 db_module.write_snapshot(conn, *row)
