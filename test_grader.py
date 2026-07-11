@@ -635,6 +635,119 @@ class TestConfirmationPrompt:
 
 
 # ---------------------------------------------------------------------------
+# main() argument/config validation and report paths
+# ---------------------------------------------------------------------------
+
+
+class TestMainPaths:
+    TODAY = datetime.now().strftime("%Y-%m-%d")
+
+    def _make_task(self, id, content, due_date=None, is_recurring=True, labels=None):
+        due = SimpleNamespace(is_recurring=is_recurring, date=due_date) if due_date else None
+        return SimpleNamespace(id=id, content=content, labels=labels or [], due=due)
+
+    def _patch_deps(self, mocker, tasks, argv=None, completed_events=None, updated_events=None):
+        """Patch all external I/O dependencies for main(), return the mock API."""
+        mock_api = MagicMock()
+        mock_api.get_labels.return_value = [
+            [SimpleNamespace(name=n) for n in ("grade:A", "grade:B", "grade:C")]
+        ]
+        mock_api.get_tasks.return_value = [tasks]
+        mocker.patch(
+            "grader.load_config",
+            return_value={
+                "todoist": {"api_token": "fake"},
+                "grading": {"days": 7},
+                "rate_limit": {"write_delay_seconds": 0},
+            },
+        )
+        mocker.patch("grader.TodoistAPI", return_value=mock_api)
+        mocker.patch(
+            "grader.fetch_item_activities",
+            side_effect=lambda tok, since, et: (
+                (completed_events or []) if et == "completed" else (updated_events or [])
+            ),
+        )
+        mocker.patch("sys.argv", argv or ["grader.py", "--dry-run"])
+        return mock_api
+
+    def test_exits_without_api_token(self, mocker):
+        mocker.patch("grader.load_config", return_value={})
+        mocker.patch("sys.argv", ["grader.py"])
+        with pytest.raises(SystemExit, match="api_token"):
+            main()
+
+    def test_completed_requires_project(self, mocker):
+        mocker.patch("grader.load_config", return_value={"todoist": {"api_token": "fake"}})
+        mocker.patch("grader.TodoistAPI", return_value=MagicMock())
+        mocker.patch("sys.argv", ["grader.py", "--completed"])
+        with pytest.raises(SystemExit, match="--project"):
+            main()
+
+    def test_today_filters_report_to_tasks_due_today(self, mocker, capsys):
+        tasks = [
+            self._make_task("1", "Standup", due_date=self.TODAY, labels=["grade:C"]),
+            self._make_task("2", "Quarterly review", due_date="2099-01-01", labels=["grade:C"]),
+        ]
+        self._patch_deps(mocker, tasks, argv=["grader.py", "--dry-run", "--summary", "--today"])
+        main()
+        out = capsys.readouterr().out
+        assert "Recurring Tasks Due Today" in out
+        assert "Standup" in out
+        assert "Quarterly review" not in out
+
+    def test_summary_renders_both_tables(self, mocker, capsys):
+        tasks = [
+            self._make_task("1", "Standup", due_date=self.TODAY, labels=["grade:A"]),
+            self._make_task("9", "Write report", is_recurring=False),
+        ]
+        completed = [
+            {
+                "object_id": "1",
+                "event_date": f"{self.TODAY}T10:00:00Z",
+                "extra_data": {"is_recurring": True},
+            }
+        ]
+        updated = [
+            {
+                "object_id": "9",
+                "event_date": f"{self.TODAY}T11:00:00Z",
+                "extra_data": {"last_due_date": "2099-01-01"},
+            }
+        ]
+        self._patch_deps(
+            mocker,
+            tasks,
+            argv=["grader.py", "--dry-run", "--summary"],
+            completed_events=completed,
+            updated_events=updated,
+        )
+        main()
+        out = capsys.readouterr().out
+        assert "Recurring Task Grades" in out
+        assert "Standup" in out
+        assert "100.0%" in out
+        # Rich wraps the second table's title to its column width, so assert on its row
+        assert "│ Write report │" in out
+
+    def test_nonrecurring_snoozes_printed_without_summary(self, mocker, capsys):
+        tasks = [self._make_task("9", "Write report", is_recurring=False)]
+        updated = [
+            {
+                "object_id": "9",
+                "event_date": f"{self.TODAY}T11:00:00Z",
+                "extra_data": {"last_due_date": "2099-01-01"},
+            }
+        ]
+        self._patch_deps(mocker, tasks, updated_events=updated)
+        main()
+        out = capsys.readouterr().out
+        assert "snoozed in the past" in out
+        assert "1x" in out
+        assert "'Write report'" in out
+
+
+# ---------------------------------------------------------------------------
 # --completed passes midnight-truncated since to fetch_completed_tasks
 # ---------------------------------------------------------------------------
 
@@ -687,6 +800,15 @@ class TestResolveProjectId:
         api = self._make_api(["Work"])
         with pytest.raises(SystemExit):
             resolve_project_id(api, "Nonexistent")
+
+    def test_handles_unpaginated_project_objects(self):
+        # get_projects may yield bare project objects instead of list pages
+        api = MagicMock()
+        api.get_projects.return_value = [
+            SimpleNamespace(name="Work", id="id_Work"),
+            SimpleNamespace(name="Personal", id="id_Personal"),
+        ]
+        assert resolve_project_id(api, "Personal") == "id_Personal"
 
 
 # ---------------------------------------------------------------------------

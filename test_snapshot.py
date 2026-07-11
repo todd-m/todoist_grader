@@ -13,6 +13,7 @@ from snapshot import (
     compute_avg_age,
     fetch_filter_tasks,
     fetch_todoist_filters,
+    load_config,
     main,
     resolve_filters,
 )
@@ -24,6 +25,17 @@ def conn():
     c = db.init_db(":memory:")
     yield c
     c.close()
+
+
+class TestLoadConfig:
+    def test_exits_when_file_missing(self, tmp_path):
+        with pytest.raises(SystemExit, match="Config file not found"):
+            load_config(str(tmp_path / "nope.toml"))
+
+    def test_parses_toml(self, tmp_path):
+        cfg_file = tmp_path / "config.toml"
+        cfg_file.write_text('[todoist]\napi_token = "tok"\n')
+        assert load_config(str(cfg_file)) == {"todoist": {"api_token": "tok"}}
 
 
 class TestInitDb:
@@ -523,6 +535,22 @@ class TestMain:
         assert mock_run.called
         assert mock_run.call_args.args[0] == ["open", "snapshots_graph.html"]
 
+    def test_prints_path_when_open_command_missing(self, mocker, capsys):
+        self._patched_conn(mocker, counts={"7 days": 42})
+        mocker.patch("snapshot.subprocess.run", side_effect=FileNotFoundError)
+        self._patch_date(mocker, "2026-06-05")
+        main()
+        assert "Graph written to snapshots_graph.html" in capsys.readouterr().out
+
+    def test_exits_without_api_token(self, mocker):
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={"snapshots": {"filters": ["next 7 days"]}},
+        )
+        mocker.patch("sys.argv", ["snapshot.py"])
+        with pytest.raises(SystemExit, match="api_token"):
+            main()
+
     def test_no_solo_filters_calls_render_page_with_one_chart(self, mocker):
         self._patched_conn(mocker, counts={"7 days": 42})
         mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
@@ -702,6 +730,36 @@ class TestMain:
         assert "Next Year" in subtitles  # solo chart
 
 
+class TestGraphOnly:
+    def _patch_common(self, mocker, conn):
+        mocker.patch(
+            "snapshot.load_config",
+            return_value={"snapshots": {"filters": ["next 7 days"], "db_path": "irrelevant"}},
+        )
+        mocker.patch("snapshot.db.init_db", return_value=conn)
+        mocker.patch("snapshot.graph.write_graph")
+        mocker.patch("snapshot.subprocess.run")
+        mocker.patch("sys.argv", ["snapshot.py", "--graph-only"])
+
+    def test_renders_graph_from_existing_data(self, mocker):
+        conn = db_module.init_db(":memory:")
+        today = date.today().isoformat()
+        db_module.write_snapshot(conn, today, "Next 7 Days", 5, 12.0)
+        self._patch_common(mocker, conn)
+        mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
+        main()
+        groups, _ = mock_render.call_args.args
+        labels = groups[0][0][0]["labels"]
+        assert len(labels) == 30
+        assert labels[-1] == today
+
+    def test_exits_when_db_has_no_snapshots(self, mocker):
+        conn = db_module.init_db(":memory:")
+        self._patch_common(mocker, conn)
+        with pytest.raises(SystemExit, match="No snapshot data"):
+            main()
+
+
 class TestReadLastNDays:
     def test_returns_last_7_days_and_excludes_older(self, conn):
         for d, count in [
@@ -747,6 +805,12 @@ class TestReadLastNDays:
         assert result["Next 7 Days"][0].count == 10
         assert result["Next 30 Days"][0].count == 20
 
+    def test_as_of_defaults_to_today(self, conn):
+        today = date.today().isoformat()
+        db.write_snapshot(conn, today, "Next 7 Days", 4)
+        result = db.read_last_n_days(conn, ["Next 7 Days"])
+        assert result["Next 7 Days"] == [SnapshotRow(today, 4, None)]
+
     def test_n_equals_1_returns_only_as_of_date(self, conn):
         db.write_snapshot(conn, "2026-06-05", "Next 7 Days", 10)
         db.write_snapshot(conn, "2026-06-06", "Next 7 Days", 20)
@@ -773,6 +837,13 @@ class TestReadLastNDays:
         result = db.read_last_n_days(conn, ["Next 7 Days"], as_of="2026-06-30")
         rows = result["Next 7 Days"]
         assert [(r.date, r.count) for r in rows] == [("2026-06-01", 2), ("2026-06-30", 3)]
+
+
+class TestWriteGraph:
+    def test_writes_html_to_path(self, tmp_path):
+        path = tmp_path / "out.html"
+        graph.write_graph("<html>hi</html>", str(path))
+        assert path.read_text(encoding="utf-8") == "<html>hi</html>"
 
 
 class TestBuildDataset:

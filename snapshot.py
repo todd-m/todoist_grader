@@ -298,5 +298,5 @@ def main() -> None:
     _render_graph(snap_cfg, history, today)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
