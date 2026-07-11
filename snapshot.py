@@ -141,18 +141,27 @@ def _render_graph(snap_cfg: dict, history: dict) -> None:
     }
     solo_age_rows = {k: v for k, v in solo_age_rows.items() if any(a is not None for _, a in v)}
 
-    charts: list[tuple[dict, str]] = []
+    # Each group keeps one filter's stats together (count, age, …) on its own row.
+    groups: list[list[tuple[dict, str]]] = []
+
+    main_group: list[tuple[dict, str]] = []
     if main_count_rows:
-        charts.append((graph.build_dataset(main_count_rows), ""))
-    for name, series in solo_count_rows.items():
-        charts.append((graph.build_dataset({name: series}), name))
+        main_group.append((graph.build_dataset(main_count_rows), ""))
     if main_age_rows:
-        charts.append((graph.build_dataset(main_age_rows), "Avg Task Age (days)"))
-    for name, series in solo_age_rows.items():
-        charts.append((graph.build_dataset({name: series}), f"{name} — Avg Task Age (days)"))
+        main_group.append((graph.build_dataset(main_age_rows), "Avg Task Age (days)"))
+    if main_group:
+        groups.append(main_group)
+
+    for name, series in solo_count_rows.items():
+        solo_group: list[tuple[dict, str]] = [(graph.build_dataset({name: series}), name)]
+        if name in solo_age_rows:
+            solo_group.append(
+                (graph.build_dataset({name: solo_age_rows[name]}), f"{name} — Avg Task Age (days)")
+            )
+        groups.append(solo_group)
 
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
-    html = graph.render_page(charts, "Task Snapshots — Last 30 Days")
+    html = graph.render_page(groups, "Task Snapshots — Last 30 Days")
     graph.write_graph(html, graph_path)
     try:
         subprocess.run(["open", graph_path])

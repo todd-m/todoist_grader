@@ -519,8 +519,8 @@ class TestMain:
         self._patch_date(mocker, "2026-06-05")
         main()
         assert mock_render.called
-        charts, _ = mock_render.call_args.args
-        assert len(charts) == 1
+        groups, _ = mock_render.call_args.args
+        assert len(groups) == 1
 
     def test_solo_filter_calls_render_page_with_two_charts(self, mocker):
         mocker.patch(
@@ -555,9 +555,9 @@ class TestMain:
         mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
         self._patch_date(mocker, "2026-06-05")
         main()
-        charts, _ = mock_render.call_args.args
-        assert len(charts) == 2
-        subtitles = [sub for _, sub in charts]
+        groups, _ = mock_render.call_args.args
+        assert len(groups) == 2
+        subtitles = [sub for group in groups for _, sub in group]
         assert "" in subtitles
         assert "Next 30 Days" in subtitles
 
@@ -573,9 +573,11 @@ class TestMain:
         mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
         self._patch_date(mocker, "2026-06-07")
         main()
-        charts, _ = mock_render.call_args.args
-        subtitles = [sub for _, sub in charts]
-        assert "Avg Task Age (days)" in subtitles
+        groups, _ = mock_render.call_args.args
+        # Count and age for the main filters stay together in one group/row.
+        main_group_subtitles = [sub for _, sub in groups[0]]
+        assert "" in main_group_subtitles
+        assert "Avg Task Age (days)" in main_group_subtitles
 
     def test_solo_filter_gets_separate_age_chart(self, mocker):
         mocker.patch(
@@ -608,8 +610,9 @@ class TestMain:
         mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
         self._patch_date(mocker, "2026-06-07")
         main()
-        charts, _ = mock_render.call_args.args
-        subtitles = [sub for _, sub in charts]
+        groups, _ = mock_render.call_args.args
+        assert len(groups) == 2  # main group + separate solo group
+        subtitles = [sub for group in groups for _, sub in group]
         assert "Avg Task Age (days)" in subtitles  # main age chart
         assert "Next 30 Days — Avg Task Age (days)" in subtitles  # solo age chart
 
@@ -645,8 +648,8 @@ class TestMain:
         mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
         self._patch_date(mocker, "2026-06-05")
         main()
-        charts, _ = mock_render.call_args.args
-        subtitles = [sub for _, sub in charts]
+        groups, _ = mock_render.call_args.args
+        subtitles = [sub for group in groups for _, sub in group]
         assert "Next 7 Days" in subtitles
 
     def test_solo_filter_not_in_filters_is_still_fetched(self, mocker):
@@ -682,9 +685,9 @@ class TestMain:
         mock_render = mocker.patch("snapshot.graph.render_page", return_value="<html/>")
         self._patch_date(mocker, "2026-06-05")
         main()
-        charts, _ = mock_render.call_args.args
-        assert len(charts) == 2
-        subtitles = [sub for _, sub in charts]
+        groups, _ = mock_render.call_args.args
+        assert len(groups) == 2
+        subtitles = [sub for group in groups for _, sub in group]
         assert "" in subtitles  # main chart
         assert "Next Year" in subtitles  # solo chart
 
@@ -835,53 +838,57 @@ class TestRenderChart:
         fragment = graph.render_chart({"labels": [], "datasets": []}, "", 0)
         assert 'id="chart-0"' in fragment
 
+    def test_wrapped_in_chart_cell(self):
+        fragment = graph.render_chart({"labels": [], "datasets": []}, "", 0)
+        assert 'class="chart-cell"' in fragment
+
 
 class TestRenderPage:
     def test_is_valid_html_document(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "")]], "Test")
         assert html.startswith("<!DOCTYPE html>")
         assert "</html>" in html
 
     def test_contains_chartjs_cdn(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "")]], "Test")
         assert "cdn.jsdelivr.net/npm/chart.js" in html
 
     def test_page_title_in_title_tag_and_h1(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "")], "My Page")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "")]], "My Page")
         assert "<title>My Page</title>" in html
         assert "<h1>My Page</h1>" in html
 
     def test_title_html_escaped(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "")], "<Page & Title>")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "")]], "<Page & Title>")
         assert "<Page & Title>" not in html
         assert "&lt;Page &amp; Title&gt;" in html
 
     def test_contains_prefers_color_scheme(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "")]], "Test")
         assert "prefers-color-scheme" in html
 
     def test_single_chart_has_one_canvas(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "")], "Test")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "")]], "Test")
         assert html.count("<canvas") == 1
 
     def test_two_charts_have_two_canvases(self):
         pair = ({"labels": [], "datasets": []}, "")
-        html = graph.render_page([pair, pair], "Test")
+        html = graph.render_page([[pair, pair]], "Test")
         assert html.count("<canvas") == 2
 
     def test_chart_ids_are_unique(self):
         pair = ({"labels": [], "datasets": []}, "")
-        html = graph.render_page([pair, pair], "Test")
+        html = graph.render_page([[pair, pair]], "Test")
         assert 'id="chart-0"' in html
         assert 'id="chart-1"' in html
 
     def test_subtitle_appears_when_non_empty(self):
-        html = graph.render_page([({"labels": [], "datasets": []}, "View All")], "Test")
+        html = graph.render_page([[({"labels": [], "datasets": []}, "View All")]], "Test")
         assert "View All" in html
 
     def test_embeds_dataset_json(self):
         dataset = {"labels": ["2026-06-06"], "datasets": [{"label": "Filter A", "data": [42]}]}
-        html = graph.render_page([(dataset, "")], "Test")
+        html = graph.render_page([[(dataset, "")]], "Test")
         assert '"Filter A"' in html
         assert "42" in html
 
@@ -890,6 +897,30 @@ class TestRenderPage:
             "labels": ["2026-06-06"],
             "datasets": [{"label": "</script><script>alert(1)</script>", "data": [1]}],
         }
-        html = graph.render_page([(dataset, "")], "Test")
+        html = graph.render_page([[(dataset, "")]], "Test")
         assert "</script><script>" not in html
         assert r"<\/script>" in html
+
+    def test_one_section_per_group(self):
+        chart = ({"labels": [], "datasets": []}, "")
+        html = graph.render_page([[chart, chart], [chart, chart]], "Test")
+        assert html.count('class="chart-group"') == 2
+
+    def test_group_charts_stay_in_same_section(self):
+        chart = ({"labels": [], "datasets": []}, "")
+        html = graph.render_page([[chart, chart]], "Test")
+        assert html.count('class="chart-group"') == 1
+        assert html.count("<canvas") == 2
+
+    def test_single_chart_group_renders_intact(self):
+        html = graph.render_page([[({"labels": [], "datasets": []}, "Count only")]], "Test")
+        assert html.count('class="chart-group"') == 1
+        assert html.count("<canvas") == 1
+        assert "Count only" in html
+
+    def test_canvas_ids_unique_across_groups(self):
+        chart = ({"labels": [], "datasets": []}, "")
+        html = graph.render_page([[chart, chart], [chart]], "Test")
+        assert 'id="chart-0"' in html
+        assert 'id="chart-1"' in html
+        assert 'id="chart-2"' in html

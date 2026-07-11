@@ -34,29 +34,39 @@ def build_dataset(rows: dict[str, list]) -> dict:
 def render_chart(dataset: dict, subtitle: str, index: int) -> str:
     data_json = json.dumps(dataset).replace("</", r"<\/")
     canvas_id = f"chart-{int(index)}"
-    heading = f"  <h2>{_html.escape(subtitle)}</h2>\n" if subtitle else ""
-    return f"""{heading}  <div class="chart-container">
-    <canvas id="{canvas_id}"></canvas>
-  </div>
-  <script>
-    new Chart(document.getElementById('{canvas_id}'), {{
-      type: 'line',
-      data: {data_json},
-      options: {{
-        responsive: true,
-        plugins: {{ legend: {{ labels: {{ color: textColor }} }} }},
-        scales: {{
-          x: {{ ticks: {{ color: textColor }}, grid: {{ color: gridColor }} }},
-          y: {{ ticks: {{ color: textColor }}, grid: {{ color: gridColor }}, beginAtZero: false }}
+    heading = f"    <h2>{_html.escape(subtitle)}</h2>\n" if subtitle else ""
+    return f"""  <div class="chart-cell">
+{heading}    <div class="chart-container">
+      <canvas id="{canvas_id}"></canvas>
+    </div>
+    <script>
+      new Chart(document.getElementById('{canvas_id}'), {{
+        type: 'line',
+        data: {data_json},
+        options: {{
+          responsive: true,
+          plugins: {{ legend: {{ labels: {{ color: textColor }} }} }},
+          scales: {{
+            x: {{ ticks: {{ color: textColor }}, grid: {{ color: gridColor }} }},
+            y: {{ ticks: {{ color: textColor }}, grid: {{ color: gridColor }}, beginAtZero: false }}
+          }}
         }}
-      }}
-    }});
-  </script>"""
+      }});
+    </script>
+  </div>"""
 
 
-def render_page(charts: list[tuple[dict, str]], title: str) -> str:
+def render_page(groups: list[list[tuple[dict, str]]], title: str) -> str:
     escaped_title = _html.escape(title)
-    body_fragments = "\n".join(render_chart(ds, sub, i) for i, (ds, sub) in enumerate(charts))
+    sections = []
+    index = 0
+    for group in groups:
+        cells = []
+        for ds, sub in group:
+            cells.append(render_chart(ds, sub, index))
+            index += 1
+        sections.append('  <section class="chart-group">\n' + "\n".join(cells) + "\n  </section>")
+    body_fragments = "\n".join(sections)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,12 +102,22 @@ def render_page(charts: list[tuple[dict, str]], title: str) -> str:
     h2 {{
       font-size: 14px;
       font-weight: 600;
-      margin: 32px 0 12px;
+      margin: 0 0 12px;
       color: var(--fg);
+    }}
+    .chart-group {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 24px 32px;
+      max-width: 1400px;
+      margin-bottom: 40px;
+    }}
+    .chart-cell {{
+      min-width: 0;
+      max-width: 700px;
     }}
     .chart-container {{
       position: relative;
-      max-width: 900px;
     }}
   </style>
   <script>

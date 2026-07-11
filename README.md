@@ -30,8 +30,11 @@ Thresholds are configurable.
 ## Installation
 
 ```bash
-pip install todoist-api-python requests rich
+make install
 ```
+
+Creates a `.venv` virtual environment and installs pinned dependencies from
+`requirements.txt`.
 
 ## Configuration
 
@@ -56,14 +59,17 @@ write_delay_seconds = 0.5
 
 ```bash
 # Preview changes without writing anything
-python grader.py --dry-run --summary
+make dry-run
 
 # Apply grades and print a table
-python grader.py --summary
+make summary
 
-# Use a different config file
-python grader.py --config ~/my-config.toml
+# Or invoke directly, e.g. with a different config file
+.venv/bin/python grader.py --config ~/my-config.toml
 ```
+
+Run `make help` for the full list of targets (`run`, `dry-run`, `summary`,
+`today`, `completed`, `snapshot`, `graph`, `test`, `lint`, `audit`, `ci`).
 
 ### Flags
 
@@ -125,10 +131,10 @@ solo_filters = [                   # optional; each gets its own chart below the
 
 Filter names can be defined in `filters` and/or `solo_filters`. Any name with no match in Todoist is warned and skipped.
 
-After printing the table, `make snapshot` generates `snapshots_graph.html` and opens it in your browser. The page contains:
+After printing the table, `make snapshot` generates `snapshots_graph.html` and opens it in your browser. The page shows the last 30 days of data, one row of charts per filter group:
 
-- **Count charts** — last 7 days of task counts, one series per filter. Filters in `solo_filters` get their own chart below the main one.
-- **Age charts** — last 7 days of average task age, following the same layout. Solo filters get a separate age chart as well.
+- **Main row** — a task-count chart (one series per filter in `filters`) alongside an average-task-age chart.
+- **Solo rows** — each filter in `solo_filters` gets its own row with its count and age charts side by side.
 
 The page respects the system dark/light appearance preference.
 
