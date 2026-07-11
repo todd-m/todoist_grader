@@ -3,7 +3,7 @@ import argparse
 import subprocess
 import sys
 import tomllib
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
@@ -16,6 +16,7 @@ from todoist_api import build_last_completion_map, get_with_retry
 
 SYNC_URL = "https://api.todoist.com/api/v1/sync"
 FILTER_URL = "https://api.todoist.com/api/v1/tasks/filter"
+GRAPH_DAYS = 30
 
 
 def load_config(path: str = "config.toml") -> dict:
@@ -111,7 +112,8 @@ def compute_avg_age(
     return sum(ages) / len(ages) if ages else None
 
 
-def _render_graph(snap_cfg: dict, history: dict) -> None:
+def _render_graph(snap_cfg: dict, history: dict, end: str) -> None:
+    start = (date.fromisoformat(end) - timedelta(days=GRAPH_DAYS - 1)).isoformat()
     solo_filter_names = {n.lower() for n in snap_cfg.get("solo_filters", [])}
 
     # Count series: extract (date, count) from SnapshotRows
@@ -146,22 +148,27 @@ def _render_graph(snap_cfg: dict, history: dict) -> None:
 
     main_group: list[tuple[dict, str]] = []
     if main_count_rows:
-        main_group.append((graph.build_dataset(main_count_rows), ""))
+        main_group.append((graph.build_dataset(main_count_rows, start, end), ""))
     if main_age_rows:
-        main_group.append((graph.build_dataset(main_age_rows), "Avg Task Age (days)"))
+        main_group.append((graph.build_dataset(main_age_rows, start, end), "Avg Task Age (days)"))
     if main_group:
         groups.append(main_group)
 
     for name, series in solo_count_rows.items():
-        solo_group: list[tuple[dict, str]] = [(graph.build_dataset({name: series}), name)]
+        solo_group: list[tuple[dict, str]] = [
+            (graph.build_dataset({name: series}, start, end), name)
+        ]
         if name in solo_age_rows:
             solo_group.append(
-                (graph.build_dataset({name: solo_age_rows[name]}), f"{name} — Avg Task Age (days)")
+                (
+                    graph.build_dataset({name: solo_age_rows[name]}, start, end),
+                    f"{name} — Avg Task Age (days)",
+                )
             )
         groups.append(solo_group)
 
     graph_path = snap_cfg.get("graph_path", "snapshots_graph.html")
-    html = graph.render_page(groups, "Task Snapshots — Last 30 Days")
+    html = graph.render_page(groups, f"Task Snapshots — Last {GRAPH_DAYS} Days")
     graph.write_graph(html, graph_path)
     try:
         subprocess.run(["open", graph_path])
@@ -196,10 +203,11 @@ def main() -> None:
             ]
             if not filter_names:
                 sys.exit("No snapshot data found. Run `make snapshot` first.")
-            history = db.read_last_n_days(conn, filter_names)
+            today = date.today().isoformat()
+            history = db.read_last_n_days(conn, filter_names, n=GRAPH_DAYS, as_of=today)
         finally:
             conn.close()
-        _render_graph(snap_cfg, history)
+        _render_graph(snap_cfg, history, today)
         return
 
     try:
@@ -256,7 +264,9 @@ def main() -> None:
         for display_name, n in counts.items():
             db.write_snapshot(conn, today, display_name, n, avg_ages.get(display_name))
         prior = db.read_latest_before(conn, today)
-        history = db.read_last_n_days(conn, [dn for _, dn, _ in resolved], as_of=today)
+        history = db.read_last_n_days(
+            conn, [dn for _, dn, _ in resolved], n=GRAPH_DAYS, as_of=today
+        )
     finally:
         conn.close()
 
@@ -285,7 +295,7 @@ def main() -> None:
         table.add_row(display_name, str(n), delta_str, avg_str)
 
     console.print(table)
-    _render_graph(snap_cfg, history)
+    _render_graph(snap_cfg, history, today)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import html as _html
 import json
+from datetime import date, timedelta
 
 COLORS = [
     "#388bfd",
@@ -11,8 +12,9 @@ COLORS = [
 ]
 
 
-def build_dataset(rows: dict[str, list]) -> dict:
-    all_dates = sorted({row[0] for series in rows.values() for row in series})
+def build_dataset(rows: dict[str, list], start: str, end: str) -> dict:
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    all_dates = [(first + timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
     datasets = []
     for i, (filter_name, series) in enumerate(rows.items()):
         by_date = {row[0]: row[1] for row in series}

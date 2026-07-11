@@ -766,26 +766,36 @@ class TestReadLastNDays:
 
 
 class TestBuildDataset:
-    def test_labels_are_sorted_union_of_all_dates(self):
+    def test_labels_span_every_date_in_window(self):
         rows = {
-            "Next 7 Days": [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
-            "Next 30 Days": [("2026-06-05", 20), ("2026-06-06", 21)],
+            "Next 7 Days": [("2026-06-04", 10), ("2026-06-06", 12)],
         }
-        result = graph.build_dataset(rows)
-        assert result["labels"] == ["2026-06-04", "2026-06-05", "2026-06-06"]
+        result = graph.build_dataset(rows, "2026-06-03", "2026-06-06")
+        assert result["labels"] == ["2026-06-03", "2026-06-04", "2026-06-05", "2026-06-06"]
 
     def test_missing_date_produces_none_in_series(self):
         rows = {
             "Next 7 Days": [("2026-06-04", 10), ("2026-06-05", 11), ("2026-06-06", 12)],
             "Next 30 Days": [("2026-06-05", 20), ("2026-06-06", 21)],
         }
-        result = graph.build_dataset(rows)
+        result = graph.build_dataset(rows, "2026-06-04", "2026-06-06")
         next_30 = next(d for d in result["datasets"] if d["label"] == "Next 30 Days")
         assert next_30["data"] == [None, 20, 21]
 
+    def test_gap_day_in_window_gets_none(self):
+        rows = {"Next 7 Days": [("2026-06-04", 10), ("2026-06-06", 12)]}
+        result = graph.build_dataset(rows, "2026-06-04", "2026-06-06")
+        assert result["datasets"][0]["data"] == [10, None, 12]
+
+    def test_window_pads_days_before_first_snapshot(self):
+        rows = {"Next 7 Days": [("2026-06-06", 42)]}
+        result = graph.build_dataset(rows, "2026-06-04", "2026-06-06")
+        assert result["labels"] == ["2026-06-04", "2026-06-05", "2026-06-06"]
+        assert result["datasets"][0]["data"] == [None, None, 42]
+
     def test_single_filter_single_day(self):
         rows = {"Next 7 Days": [("2026-06-06", 42)]}
-        result = graph.build_dataset(rows)
+        result = graph.build_dataset(rows, "2026-06-06", "2026-06-06")
         assert result["labels"] == ["2026-06-06"]
         assert len(result["datasets"]) == 1
         assert result["datasets"][0]["label"] == "Next 7 Days"
@@ -796,7 +806,7 @@ class TestBuildDataset:
             "Next 7 Days": [("2026-06-06", 42)],
             "Next 30 Days": [],
         }
-        result = graph.build_dataset(rows)
+        result = graph.build_dataset(rows, "2026-06-06", "2026-06-06")
         next_30 = next(d for d in result["datasets"] if d["label"] == "Next 30 Days")
         assert next_30["data"] == [None]
 
